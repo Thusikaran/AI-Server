@@ -1,141 +1,119 @@
-# AI-Server: Surveillance
+# AI Monitor Server: Intelligent Surveillance System
 
 ## 📖 About the Project
-This project is an advanced AI-powered surveillance system. It leverages real-time video streaming, state-of-the-art object detection models (YOLO and RT-DETR), and a robust backend to monitor environments and track activities across different models and shop zones.
+This project is an advanced AI-powered surveillance system. It provides real-time video streaming, state-of-the-art object detection (YOLO/RT-DETR), and a robust backend to monitor environments and track activities across different shops and cameras.
 
-### Core Stack
-- **Backend:** FastAPI (Python), utilizing `ultralytics` for YOLO models, OpenCV, ONNX Runtime (with AMD ROCm support), and SQLAlchemy for database ORM.
-- **Frontend:** Nginx serving static HTML, CSS, and JS files, providing a dashboard for real-time monitoring and analytics.
-- **Database:** PostgreSQL for storing surveillance logs, alerts, and system metadata.
-- **Streaming:** MediaMTX (Bluenviron) handling RTSP and WebRTC video streams.
-- **Deployment:** Fully containerized using Docker and Docker Compose.
-
----
-
-## 🛠 Git Setup on a New Ubuntu PC (Start to Finish)
-
-If you are setting up a brand new Ubuntu machine, follow these steps to install and configure Git so you can manage this repository.
-
-### 1. Install Git
-Open your terminal (`Ctrl + Alt + T`) and run:
-```bash
-sudo apt update
-sudo apt install git -y
-```
-
-### 2. Configure Git
-Set your name and email address. This will be attached to your commits.
-```bash
-git config --global user.name "Your Name"
-git config --global user.email "your_email@example.com"
-```
-*(Optional)* Set the default branch name to `main`:
-```bash
-git config --global init.defaultBranch main
-```
-
-### 3. Generate an SSH Key
-To securely clone and push to your remote repository (like GitHub/GitLab) without entering a password every time, generate an SSH key:
-```bash
-ssh-keygen -t ed25519 -C "your_email@example.com"
-```
-Press **Enter** to accept the default file location, and optionally enter a passphrase.
-
-### 4. Start the SSH Agent and Add Your Key
-```bash
-eval "$(ssh-agent -s)"
-ssh-add ~/.ssh/id_ed25519
-```
-
-### 5. Add the SSH Key to Your Git Provider (GitHub/GitLab)
-Display your public key:
-```bash
-cat ~/.ssh/id_ed25519.pub
-```
-Copy the entire output.
-- **GitHub:** Go to Settings -> SSH and GPG keys -> New SSH key. Paste your key and save.
-- **GitLab:** Go to Preferences -> SSH Keys -> Add new key. Paste your key and save.
-
-### 6. Clone the Repository
-Now you can safely clone the project:
-```bash
-git clone git@github.com:YourUsername/YourProjectRepo.git
-cd YourProjectRepo
-```
+### Key Features
+- **Real-time Camera Management**: Add, configure, and monitor multiple RTSP streams grouped by Shop.
+- **AI Motion & Object Detection**: Built-in background workers that process streams for motion, humans, weapons, fire, and custom models.
+- **Cloud Theft AI Trigger**: Selectively arm cameras with a Theft AI mode that automatically pings an external AWS/Cloud endpoint when motion is detected.
+- **Event Timeline**: A 24-hour visual timeline for each camera showing exactly when motion or AI detections occurred.
+- **Interactive Dashboard**: Modern glassmorphism UI for viewing camera statuses, bulk-importing setups, and configuring system settings.
 
 ---
 
-## 🚀 How to Run the Project
+## 🛠 Prerequisites: Installing Docker on Ubuntu
 
-This project uses **Docker** and **Docker Compose** to easily spin up all services (Frontend, Backend, Database, and MediaMTX) simultaneously. 
-
-### Prerequisites
-
-If you don't have Docker and Docker Compose installed on your Ubuntu machine, you can install them by running the following commands in your terminal:
+The easiest way to run this project is using Docker and Docker Compose. If you don't have them installed on your Ubuntu machine, run the following commands in your terminal:
 
 ```bash
-# Add Docker's official GPG key:
+# 1. Update your package list and install prerequisites
 sudo apt-get update
-sudo apt-get install ca-certificates curl -y
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
+sudo apt-get install ca-certificates curl gnupg -y
 
-# Add the repository to Apt sources:
+# 2. Add Docker's official GPG key
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+# 3. Add the Docker repository to Apt sources
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
   $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update
 
-# Install Docker and Docker Compose plugin
+# 4. Install Docker Engine and Docker Compose
+sudo apt-get update
 sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
 
-# Add your user to the docker group so you don't need to use sudo every time
+# 5. Add your user to the docker group (avoids needing 'sudo' for docker commands)
 sudo usermod -aG docker $USER
-# You will need to log out and log back in, or run `newgrp docker` for this to take effect.
+# NOTE: Log out and log back in, or run `newgrp docker` for this to take effect.
 ```
 
-- (Optional) NVIDIA or AMD GPUs configured for Docker if you are using GPU acceleration for AI models.
+---
 
-### Step-by-Step Execution
+## 🚀 Running the Project via Docker (Recommended)
 
-1. **Environment Variables Configuration**
-   Ensure you have a `.env` file in the root directory (alongside `docker-compose.yml`). The file must contain the following variables:
+1. **Environment Setup**
+   Ensure you have a `.env` file in the root directory (alongside `docker-compose.yml`). Example:
    ```env
-   POSTGRES_USER=your_db_user
-   POSTGRES_PASSWORD=your_db_password
-   POSTGRES_DB=surveillance
-   DATABASE_URL=postgresql://your_db_user:your_db_password@db:5432/surveillance
-   SECRET_KEY=your_super_secret_key
-   HF_TOKEN=your_huggingface_token_if_needed
+   POSTGRES_USER=postgres
+   POSTGRES_PASSWORD=postgres
+   POSTGRES_DB=aimonitor
+   DATABASE_URL=postgresql://postgres:postgres@db:5432/aimonitor
+   SECRET_KEY=supersecretkey
+   HF_TOKEN=your_huggingface_token
    ```
 
-2. **Prepare AI Models**
-   Ensure your model weights (`yolo11n.pt`, `yolo11s.pt`, `rtdetr-l.pt`, etc.) are placed inside the `backend/` directory.
-
-3. **Start the Services**
-   Run the following command from the root directory to build and start the containers in detached mode:
+2. **Build and Run**
+   Navigate to the root directory and run:
    ```bash
-   sudo docker compose up -d --build
+   docker compose up -d --build
+   ```
+   This will build the Python backend, set up the PostgreSQL database, initialize MediaMTX, and serve the Nginx frontend.
+
+3. **Access the Application**
+   - **Frontend (Dashboard):** [http://localhost](http://localhost)
+   - **Backend API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+   - **RTSP Stream Server:** `rtsp://localhost:8554`
+
+4. **Stopping the Server**
+   ```bash
+   docker compose down
    ```
 
-4. **Access the Application**
-   Once the containers are up and running, you can access the various services at:
-   - **Frontend (Dashboard):** [http://localhost:80](http://localhost:80)
-   - **Backend (FastAPI Swagger UI):** [http://localhost:8000/docs](http://localhost:8000/docs)
-   - **RTSP Stream:** `rtsp://localhost:8554`
-   - **WebRTC Stream:** [http://localhost:8889](http://localhost:8889)
+---
 
-### Stopping the Services
-To stop the application and safely bring down the containers, run:
+## 💻 Running the Project Locally (Without Docker)
+
+If you prefer to run the backend natively on your Ubuntu machine (for active development or debugging), follow these steps:
+
+### 1. Install System Dependencies
+The backend requires Python, PostgreSQL, and system libraries for OpenCV.
 ```bash
-sudo docker compose down
+sudo apt update
+sudo apt install python3-pip python3-venv postgresql postgresql-contrib libgl1-mesa-glx -y
 ```
 
-### Remote Deployment
-If you want to deploy this stack to a remote server, we have provided a handy script:
+### 2. Setup the Database
+Create the database in PostgreSQL:
 ```bash
-./setup_remote.sh
+sudo -u postgres psql -c "CREATE DATABASE aimonitor;"
+sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
 ```
-This script will prompt you for SSH details, transfer the files via `rsync`, install Docker on the remote machine if missing, and automatically spin up the stack for you.
+
+### 3. Install Python Dependencies
+Navigate into the `backend/` folder, create a virtual environment, and install dependencies:
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 4. Run the Backend
+With your virtual environment active and `.env` configured:
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+*(Note: If running natively, you will also need to manually serve the `frontend/` folder using a simple HTTP server or Nginx, and run a local instance of MediaMTX if you require RTSP passthrough).*
+
+---
+
+## ⚙️ Configuring System Settings (UI)
+The system features a **Settings UI** to manage global configurations (like the Cloud Theft API Trigger URL). 
+- Go to the **Shops & Cameras** tab.
+- Click the **⚙️ Settings** button in the top right.
+- Set the webhook URL that should be triggered upon motion detection.
