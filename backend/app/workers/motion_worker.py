@@ -146,12 +146,16 @@ class MotionWorker(threading.Thread):
                             # Check if Cloud Theft API is active for this camera
                             cam_rec = db.query(Camera).filter(Camera.id == self.camera_id).first()
                             if cam_rec and getattr(cam_rec, 'theft_active', False):
+                                from app.models.all_models import SystemSetting
+                                setting = db.query(SystemSetting).filter_by(key="cloud_trigger_url").first()
+                                trigger_url = setting.value if setting else "http://13.48.57.153:8000/api/trigger/"
+                                
                                 import requests
                                 import threading
                                 def _trigger_cloud():
                                     try:
-                                        print(f"[MotionWorker] Triggering Cloud Theft AI for {self.camera_name}")
-                                        res = requests.post("http://13.48.57.153:8000/api/trigger/", data={
+                                        print(f"[MotionWorker] Triggering Cloud Theft AI for {self.camera_name} to {trigger_url}")
+                                        res = requests.post(trigger_url, data={
                                             "shop_name": shop_name,
                                             "camera_name": self.camera_name,
                                             "model_name": "theft"

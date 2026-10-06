@@ -9,7 +9,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, timedelta
 from app.database import get_db
-from app.models.all_models import Shop, Camera, DetectionEvent, ModelType, CameraModelAssignment, Model
+from app.models.all_models import Shop, Camera, DetectionEvent, ModelType, CameraModelAssignment, Model, SystemSetting
 from app.workers.worker_manager import manager
 import psutil
 import threading
@@ -476,3 +476,22 @@ def update_dashboard_settings(payload: SettingsUpdate, db: Session = Depends(get
                     manager.start_worker(cam.id)
                     
     return {"status": "success", "server_mode": payload.server_mode}
+
+class SystemSettingsUpdate(BaseModel):
+    cloud_trigger_url: str
+
+@router.get("/system_settings")
+def get_system_settings(db: Session = Depends(get_db)):
+    setting = db.query(SystemSetting).filter_by(key="cloud_trigger_url").first()
+    return {"cloud_trigger_url": setting.value if setting else "http://13.48.57.153:8000/api/trigger/"}
+
+@router.post("/system_settings")
+def update_system_settings(payload: SystemSettingsUpdate, db: Session = Depends(get_db)):
+    setting = db.query(SystemSetting).filter_by(key="cloud_trigger_url").first()
+    if not setting:
+        setting = SystemSetting(key="cloud_trigger_url", value=payload.cloud_trigger_url)
+        db.add(setting)
+    else:
+        setting.value = payload.cloud_trigger_url
+    db.commit()
+    return {"status": "success", "cloud_trigger_url": setting.value}

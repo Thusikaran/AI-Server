@@ -897,3 +897,39 @@ async function toggleShopTheft(shopId) {
     UI.toast(`Cloud Theft AI ${targetState ? 'Enabled' : 'Disabled'} for all cameras in ${shopData.shop.name}!`, 'success');
 }
 
+// ─── Settings Modal ──────────────────────────────────────────────────────────
+
+async function openSettingsModal() {
+    document.getElementById('settings-modal').classList.add('active');
+    try {
+        const res = await fetch(`${API_BASE}/dashboard/system_settings`);
+        if (res.ok) {
+            const data = await res.json();
+            document.getElementById('setting-cloud-url').value = data.cloud_trigger_url || "";
+        }
+    } catch (e) {
+        console.error("Failed to load settings", e);
+    }
+}
+
+async function saveSettings() {
+    const url = document.getElementById('setting-cloud-url').value.trim();
+    if (!url) return UI.toast("URL cannot be empty", "error");
+    
+    try {
+        const res = await fetch(`${API_BASE}/dashboard/system_settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cloud_trigger_url: url })
+        });
+        if (res.ok) {
+            UI.toast("Settings saved successfully", "success");
+            closeModals();
+        } else {
+            UI.toast("Failed to save settings", "error");
+        }
+    } catch (e) {
+        UI.toast("Network error saving settings", "error");
+    }
+}
+

@@ -88,3 +88,9 @@ class ModelVersion(Base):
     version_tag = Column(String(50))
     deployed_at = Column(DateTime(timezone=True), server_default=func.now())
     is_current = Column(Boolean, default=True)
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+    
+    key = Column(String(100), primary_key=True)
+    value = Column(String)

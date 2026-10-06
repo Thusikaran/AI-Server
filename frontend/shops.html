@@ -500,6 +500,7 @@
                     <button class="btn btn-primary" onclick="openShopModal()">+ Add Shop</button>
                     <button class="btn" style="background:rgba(255,255,255,.05);" onclick="openBulkModal()">Bulk Insert
                         (CSV/Excel)</button>
+                    <button class="btn" style="background:rgba(168,85,247,.15); border-color:rgba(168,85,247,.3); color:#c084fc;" onclick="openSettingsModal()">⚙️ Settings</button>
                 </div>
             </header>
 
@@ -660,6 +661,26 @@
                 </div>
             </div>
             <div id="timeline-tooltip" class="timeline-tooltip"></div>
+        </div>
+    </div>
+    
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content glass-panel" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2>⚙️ System Settings</h2>
+                <button class="btn btn-close" onclick="closeModals()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Cloud Theft API Trigger URL</label>
+                    <input type="text" id="setting-cloud-url" class="form-control" placeholder="http://13.48.57.153:8000/api/trigger/">
+                    <small style="color:#888; font-size:0.8rem; margin-top:4px; display:block;">The URL that is triggered when Cloud Theft AI detects motion.</small>
+                </div>
+                <div style="text-align: right; margin-top: 20px;">
+                    <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+                </div>
+            </div>
         </div>
     </div>
 
