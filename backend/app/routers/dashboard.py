@@ -243,15 +243,30 @@ def get_dashboard_stats(db = Depends(get_db)):
 
 @router.get("/camera-status")
 def get_camera_status():
-    all_cams = find_all_cameras()
-    online, offline, detailed = get_actual_camera_statuses(all_cams)
-    return {
-        "total": len(all_cams),
-        "online": online,
-        "offline": offline,
-        "cameras": detailed
-    }
+    """
+    Per-camera status: online / error / offline.
+    Uses motion worker state (stream_ok + error_msg) — fast, no new blocking TCP probe.
+    """
+    all_cams = find_all_cameras(filter_active_only=True)
+    all_statuses = _motion_manager.all_statuses()
+    result = {}
+    for cam in all_cams:
+        cid = cam.get("id")
+        w = all_statuses.get(cid, {})
+        if w.get("running"):
+            state = "online"
+        elif w.get("error"):
+            state = "error"
+        else:
+            state = "offline"
+        result[cid] = {
+            "online": state == "online",
+            "state": state,
+            "error": w.get("error")
+        }
+    return result
 
+@router.get("/motion-status")
 @router.get("/camera-motion-status")
 def get_all_camera_motion_status(db = Depends(get_db)):
     one_min_ago = datetime.utcnow() - timedelta(minutes=1)

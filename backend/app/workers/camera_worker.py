@@ -70,7 +70,7 @@ class CameraWorker(threading.Thread):
             rtsp_url = camera.get("rtsp_url") or camera.get("source", "")
             
             cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-            mog2 = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=16, detectShadow=True)
+            mog2 = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=16, detectShadows=True)
             tracker = HumanTracker()
             
             self.load_active_models(db)

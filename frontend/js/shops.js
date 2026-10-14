@@ -163,15 +163,12 @@ function renderShopList() {
                         <span class="expand-icon" style="font-size:0.8rem; opacity:0.8; margin-right:4px;">${isExpanded ? '▼' : '▶'}</span> ${shop.name}
                     </div>
                     <div class="shop-actions">
-                        <div style="display:flex; align-items:center; border-right:1px solid var(--glass-border); padding-right:10px; margin-right:5px;">
+                        <div style="display:flex; align-items:center;">
                             <button class="btn" style="padding: 4px 8px; font-size:0.9rem; margin-right:4px; background:rgba(245,158,11,.15); color:#fbbf24; border-color:rgba(245,158,11,.3);" onclick="toggleShopMotion(${shop.id})" title="Toggle Motion For All Cameras">🟡</button>
                             ${shopModelBtns}
                             <button class="btn theft-btn ${cameras.some(c => cameraState[c.id]?.theft) ? 'active' : ''}" style="padding: 4px 8px; font-size:0.9rem; margin-left:4px;" onclick="toggleShopTheft(${shop.id})" id="shop-theft-btn-${shop.id}" title="Toggle Cloud Theft AI For All Cameras">🦹</button>
                             <button class="btn" style="padding: 4px 8px; font-size:0.9rem; margin-left:4px; background:rgba(52,211,153,.15); color:#34d399; border-color:rgba(52,211,153,.3); transition:all 0.2s;" onclick="toggleShopAllAI(${shop.id})" title="Toggle ALL Models & Motion For All Cameras" id="shop-all-ai-btn-${shop.id}">⚡</button>
                         </div>
-                        <button class="btn btn-primary" style="padding: 4px 10px;" onclick="openCameraModal(${shop.id})">+ Camera</button>
-                        <button class="btn" style="padding: 4px 8px; background:rgba(255,255,255,.05);" onclick="openShopModal(${shop.id}, '${escapeQ(shop.name)}')">✏️</button>
-                        <button class="btn" style="padding: 4px 8px; background:rgba(239,68,68,.15); border-color:rgba(239,68,68,.3); color:var(--red);" onclick="deleteShop(${shop.id})">🗑️</button>
                     </div>
                 </div>
                 <div class="camera-list" style="margin-top:16px; margin-left:14px; padding-left:18px; border-left:2px solid var(--glass-border);">
@@ -261,8 +258,6 @@ function buildCameraHtml(cam, shopName) {
                 <button class="btn theft-btn ${isTheftActive ? 'active' : ''}" style="padding:6px 10px; font-size:1rem; margin-left:4px;" onclick="toggleCameraTheft(${cam.id}, this)" title="Cloud Theft AI">🦹</button>
                 <button class="btn" style="padding:6px 10px; font-size:1rem; background:rgba(52,211,153,.15); border-color:rgba(52,211,153,.3); margin-left:4px;" onclick="toggleCameraAllAI(${cam.id})" title="Master AI Toggle" id="cam-all-ai-btn-${cam.id}">⚡</button>
                 <button class="btn" style="padding:6px 10px; font-size:1rem; background:rgba(59,130,246,.15); border-color:rgba(59,130,246,.3);" onclick="openTimeline(${cam.id}, '${escapeQ(cam.name)}')" title="Timeline">📊</button>
-                <button class="btn" style="padding:6px 10px; font-size:1rem; background:rgba(255,255,255,.05);" onclick="openCameraModal(${cam.shop_id}, ${cam.id}, '${escapeQ(cam.name)}', '${escapeQ(cam.rtsp_url)}')" title="Edit">✏️</button>
-                <button class="btn" style="padding:6px 10px; font-size:1rem; background:rgba(239,68,68,.15); border-color:rgba(239,68,68,.3);" onclick="deleteCamera(${cam.id})" title="Delete">🗑️</button>
             </div>
         </div>
     `;

@@ -26,6 +26,7 @@ def format_camera(c: dict, shop_id: int) -> dict:
         "updated_at": c.get("updated_at") or datetime.utcnow()
     }
 
+@router.post("", response_model=ShopResponse, status_code=status.HTTP_201_CREATED)
 @router.post("/", response_model=ShopResponse, status_code=status.HTTP_201_CREATED)
 def create_shop(shop: ShopCreate, db = Depends(get_db)):
     existing = db["shops"].find_one({"name": shop.name})
@@ -45,6 +46,7 @@ def create_shop(shop: ShopCreate, db = Depends(get_db)):
     db["shops"].insert_one(new_shop_doc)
     return format_shop(new_shop_doc)
 
+@router.get("", response_model=List[ShopResponse])
 @router.get("/", response_model=List[ShopResponse])
 def get_shops(db = Depends(get_db)):
     shops = db["shops"].find()

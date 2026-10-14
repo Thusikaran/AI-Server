@@ -1,25 +1,9 @@
-# version: "3.8"
-
 services:
-  db:
-    image: postgres:15
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-    ports:
-      - "5432:5432"
-    restart: always
-
   backend:
     build: ./backend
     init: true
     ports:
       - "8000:8000"
-    depends_on:
-      - db
     security_opt:
       - seccomp:unconfined
     # runtime: nvidia
@@ -27,7 +11,8 @@ services:
       - ./backend:/app
       - ./backend/uploads:/app/uploads
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      - MONGODB_URI=${MONGODB_URI}
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME}
       - SECRET_KEY=${SECRET_KEY}
       - HF_TOKEN=${HF_TOKEN}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -54,6 +39,3 @@ services:
     depends_on:
       - backend
     restart: always
-
-volumes:
-  pgdata:

@@ -60,7 +60,7 @@ class MotionWorker(threading.Thread):
 
             cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
             mog2 = cv2.createBackgroundSubtractorMOG2(
-                history=300, varThreshold=16, detectShadow=False
+                history=300, varThreshold=16, detectShadows=False
             )
             consecutive_fails = 0
             frame_count = 0

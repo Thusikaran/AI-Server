@@ -71,6 +71,7 @@ async def upload_model(
     background_tasks.add_task(validate_model_task, model_id, file_path)
     return format_model(new_model)
 
+@router.get("", response_model=List[ModelResponse])
 @router.get("/", response_model=List[ModelResponse])
 def get_models(db = Depends(get_db)):
     models = db["models"].find()
