@@ -1,5 +1,4 @@
-
-version: "3.8"
+# version: "3.8"
 
 services:
   db:
@@ -23,7 +22,7 @@ services:
       - db
     security_opt:
       - seccomp:unconfined
-    runtime: nvidia
+    # runtime: nvidia
     volumes:
       - ./backend:/app
       - ./backend/uploads:/app/uploads
@@ -37,7 +36,7 @@ services:
   mediamtx:
     image: bluenviron/mediamtx:latest
     ports:
-      - "8554:8554"
+      - "8564:8564"
       - "8889:8889"
     environment:
       - MTX_WEBRTCADDITIONALHOSTS=localhost

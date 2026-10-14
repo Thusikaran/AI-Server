@@ -66,7 +66,7 @@ sudo usermod -aG docker $USER
 3. **Access the Application**
    - **Frontend (Dashboard):** [http://localhost](http://localhost)
    - **Backend API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
-   - **RTSP Stream Server:** `rtsp://localhost:8554`
+   - **RTSP Stream Server:** `rtsp://localhost:8564`
 
 4. **Stopping the Server**
    ```bash

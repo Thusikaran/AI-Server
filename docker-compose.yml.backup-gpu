@@ -43,7 +43,7 @@ services:
   mediamtx:
     image: bluenviron/mediamtx:latest
     ports:
-      - "8554:8554"   # RTSP
+      - "8564:8564"   # RTSP
       - "8889:8889"   # WebRTC
     environment:
       - HSA_OVERRIDE_GFX_VERSION=11.0.0
