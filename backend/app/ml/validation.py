@@ -1,25 +1,29 @@
 import os
 import cv2
 import numpy as np
-from sqlalchemy.orm import Session
-from app.database import SessionLocal
-from app.models.all_models import Model, ModelVersion
+from app.database import get_db
 import traceback
+from datetime import datetime
 
 def validate_model_task(model_id: int, file_path: str):
-    db = SessionLocal()
+    db = get_db()
+    mid = int(model_id)
     try:
-        model_db = db.query(Model).filter(Model.id == model_id).first()
+        model_db = db["models"].find_one({"$or": [{"id": mid}, {"model_id": mid}]})
         if not model_db:
             return
 
-        model_db.status = "validating"
-        db.commit()
+        db["models"].update_one(
+            {"_id": model_db["_id"]},
+            {"$set": {"status": "validating", "updated_at": datetime.utcnow()}}
+        )
 
         # Check extension
         if not file_path.endswith('.pt'):
-            model_db.status = "failed"
-            db.commit()
+            db["models"].update_one(
+                {"_id": model_db["_id"]},
+                {"$set": {"status": "failed", "updated_at": datetime.utcnow()}}
+            )
             return
             
         try:
@@ -35,16 +39,24 @@ def validate_model_task(model_id: int, file_path: str):
             results = yolo_model.predict(source=blank_frame, imgsz=640, conf=0.5, verbose=False, device=device)
             
             # If we get here without crashing, model is reasonably valid
-            model_db.status = "active"
+            db["models"].update_one(
+                {"_id": model_db["_id"]},
+                {"$set": {"status": "active", "updated_at": datetime.utcnow()}}
+            )
             
             # Create a model version record
-            new_version = ModelVersion(model_id=model_id, version_tag=model_db.version, is_current=True)
-            db.add(new_version)
-            db.commit()
+            db["model_versions"].insert_one({
+                "model_id": mid,
+                "version_tag": model_db.get("version", "v1.0"),
+                "is_current": True,
+                "deployed_at": datetime.utcnow()
+            })
             
         except Exception as e:
             print(f"Validation failed for model {model_id}: {traceback.format_exc()}")
-            model_db.status = "failed"
-            db.commit()
-    finally:
-        db.close()
+            db["models"].update_one(
+                {"_id": model_db["_id"]},
+                {"$set": {"status": "failed", "updated_at": datetime.utcnow()}}
+            )
+    except Exception as ex:
+        print(f"Error during validate_model_task: {ex}")

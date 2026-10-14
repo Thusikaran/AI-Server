@@ -1,11 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import engine, Base, SessionLocal
-from app.models import all_models
+from app.database import get_db, find_all_cameras
 from app.routers import shops, cameras, bulk, models, worker_api, dashboard, trigger_api
 from app.workers.motion_worker import MotionWorkerManager
-
-Base.metadata.create_all(bind=engine)
+import os
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="AI Monitor Server")
 
@@ -24,8 +23,6 @@ app.include_router(worker_api.router)
 app.include_router(dashboard.router)
 app.include_router(trigger_api.router)
 
-import os
-from fastapi.staticfiles import StaticFiles
 os.makedirs("/app/uploads", exist_ok=True)
 app.mount("/api/uploads", StaticFiles(directory="/app/uploads"), name="uploads")
 
@@ -39,36 +36,32 @@ def startup_event():
         return
         
     print("Server starting in STANDALONE Mode. Restoring continuous polling workers...")
-    # Automatically restore workers for all active cameras
-    db = SessionLocal()
+    db = get_db()
     try:
         from app.routers.worker_api import motion_manager
         from app.workers.worker_manager import manager
         
-        active_cameras = db.query(all_models.Camera).filter(all_models.Camera.is_active == True).all()
+        active_cameras = find_all_cameras(filter_active_only=True)
         for cam in active_cameras:
+            cid = cam["id"]
+            rtsp = cam.get("rtsp_url") or cam.get("source", "")
+            
             # Restore motion worker
-            if getattr(cam, 'motion_active', False):
-                motion_manager.start(cam.id, cam.rtsp_url, cam.shop_id, cam.name)
-            
-
-            
+            if cam.get('motion_active', False):
+                motion_manager.start(cid, rtsp, cam.get("shop_id"), cam.get("name"))
 
             # Restore standard AI model workers (YOLO)
-            running_assignments = db.query(all_models.CameraModelAssignment).filter(
-                all_models.CameraModelAssignment.camera_id == cam.id,
-                all_models.CameraModelAssignment.is_running == True
-            ).count()
+            running_assignments = db["camera_model_assignments"].count_documents({
+                "camera_id": cid,
+                "is_running": True
+            })
             if running_assignments > 0:
-                manager.start_worker(cam.id)
+                manager.start_worker(cid)
                 
-        print(f"Restored workers for active cameras.")
+        print(f"Restored workers for {len(active_cameras)} active cameras from MongoDB Atlas.")
     except Exception as e:
         print(f"Error restoring workers during startup: {e}")
-    finally:
-        db.close()
 
 @app.get("/")
 def read_root():
-    return {"message": "AI Monitor Server API is running"}
-
+    return {"message": "AI Monitor Server API is running (MongoDB Atlas Connected)"}

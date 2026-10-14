@@ -1,11 +1,3 @@
-"""
-MotionWorker — lightweight MOG2-based motion detection thread.
-
-States per camera:
-  - running=True, error=None       → active, reading frames OK
-  - running=False, error=None      → not started / cleanly stopped
-  - running=False, error=<msg>     → stream error (RTSP unreachable / bad channel)
-"""
 import threading
 import time
 import socket
@@ -13,15 +5,14 @@ import urllib.parse
 import cv2
 import numpy as np
 import os
+import requests
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 from datetime import datetime
-from app.database import SessionLocal
-from app.models.all_models import DetectionEvent, Shop, Camera
+from app.database import get_db, find_camera_by_id, get_next_sequence
 
 MAX_CONSECUTIVE_FAILS = 10   # retry N times before marking error
 RECONNECT_WAIT = 5           # seconds between reconnect attempts
-
 
 def _tcp_reachable(rtsp_url: str, timeout: float = 2.0) -> bool:
     try:
@@ -34,20 +25,19 @@ def _tcp_reachable(rtsp_url: str, timeout: float = 2.0) -> bool:
     except Exception:
         return False
 
-
 class MotionWorker(threading.Thread):
     MOTION_THRESHOLD = 500  # Tuned for 640x360 resolution
     COOLDOWN_SECONDS = 10
 
     def __init__(self, camera_id: int, rtsp_url: str, shop_id: int, camera_name: str):
         super().__init__(daemon=True)
-        self.camera_id = camera_id
+        self.camera_id = int(camera_id)
         self.rtsp_url = rtsp_url
-        self.shop_id = shop_id
+        self.shop_id = int(shop_id) if shop_id is not None else 0
         self.camera_name = camera_name
         self.running = False
-        self.error_msg = None          # set when stream permanently fails
-        self.stream_ok = None          # True/False/None(checking)
+        self.error_msg = None
+        self.stream_ok = None
         self._last_event_at = None
         self._open_event_id = None
 
@@ -58,15 +48,11 @@ class MotionWorker(threading.Thread):
         self.running = True
         self.error_msg = None
         self.stream_ok = None
+        db = get_db()
         try:
-            db = SessionLocal()
-            try:
-                shop = db.query(Shop).filter(Shop.id == self.shop_id).first()
-                shop_name = shop.name if shop else "Unknown"
-            finally:
-                db.close()
+            shop = db["shops"].find_one({"$or": [{"shop_id": self.shop_id}, {"id": self.shop_id}]})
+            shop_name = shop.get("name") if shop else "Unknown"
 
-            # Quick TCP check before wasting time on OpenCV
             if not _tcp_reachable(self.rtsp_url):
                 self.error_msg = "TCP unreachable"
                 self.stream_ok = False
@@ -74,7 +60,7 @@ class MotionWorker(threading.Thread):
 
             cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
             mog2 = cv2.createBackgroundSubtractorMOG2(
-                history=300, varThreshold=16, detectShadows=False
+                history=300, varThreshold=16, detectShadow=False
             )
             consecutive_fails = 0
             frame_count = 0
@@ -88,165 +74,159 @@ class MotionWorker(threading.Thread):
                     if consecutive_fails >= MAX_CONSECUTIVE_FAILS:
                         self.error_msg = f"Stream read failed {consecutive_fails}x in a row"
                         self.stream_ok = False
-                        break  # exit loop, thread ends with error state
+                        break
 
                     cap.release()
                     time.sleep(RECONNECT_WAIT)
                     cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
                     continue
 
-                # Successful frame — clear error state
                 consecutive_fails = 0
                 self.stream_ok = True
                 self.error_msg = None
 
-                # Process ~10 FPS (1 out of every 3 frames from a 30 FPS source)
                 if frame_count % 3 != 0:
                     continue
 
-                # Resize to 640x360 for much faster CPU processing
                 frame = cv2.resize(frame, (640, 360))
-
                 fg_mask = mog2.apply(frame)
                 motion_area = int(np.sum(fg_mask > 200))
-                # print(f"[TEST] Camera {self.camera_id} moving pixels: {motion_area}")
                 now = datetime.utcnow()
 
                 if motion_area >= self.MOTION_THRESHOLD:
                     if (self._last_event_at is None or
                             (now - self._last_event_at).total_seconds() > self.COOLDOWN_SECONDS):
                         if self._open_event_id:
-                            db = SessionLocal()
-                            try:
-                                ev = db.query(DetectionEvent).filter(
-                                    DetectionEvent.id == self._open_event_id
-                                ).first()
-                                if ev and ev.ended_at is None:
-                                    ev.ended_at = now
-                                    db.commit()
-                            finally:
-                                db.close()
+                            db["detection_events"].update_one(
+                                {"_id": self._open_event_id, "ended_at": None},
+                                {"$set": {"ended_at": now}}
+                            )
 
-                        new_ev = DetectionEvent(
-                            camera_id=self.camera_id,
-                            model_id=None,
-                            shop_id=self.shop_id,
-                            shop_name=shop_name,
-                            camera_name=self.camera_name,
-                            detection_type="motion",
-                            confidence=min(1.0, motion_area / 50000),
-                        )
-                        db = SessionLocal()
-                        try:
-                            db.add(new_ev)
-                            db.commit()
-                            db.refresh(new_ev)
-                            self._open_event_id = new_ev.id
-                            
-                            # Check if Cloud Theft API is active for this camera
-                            cam_rec = db.query(Camera).filter(Camera.id == self.camera_id).first()
-                            if cam_rec and getattr(cam_rec, 'theft_active', False):
-                                from app.models.all_models import SystemSetting
-                                setting = db.query(SystemSetting).filter_by(key="cloud_trigger_url").first()
-                                trigger_url = setting.value if setting else "http://13.48.57.153:8000/api/trigger/"
-                                
-                                import requests
-                                import threading
-                                def _trigger_cloud():
-                                    try:
-                                        print(f"[MotionWorker] Triggering Cloud Theft AI for {self.camera_name} to {trigger_url}")
-                                        res = requests.post(trigger_url, data={
+                        event_id = get_next_sequence("event_id")
+                        new_ev = {
+                            "event_id": event_id,
+                            "camera_id": self.camera_id,
+                            "model_id": None,
+                            "shop_id": self.shop_id,
+                            "shop_name": shop_name,
+                            "camera_name": self.camera_name,
+                            "detection_type": "motion",
+                            "confidence": min(1.0, motion_area / 50000),
+                            "detected_at": now,
+                            "ended_at": None,
+                            "metadata": {}
+                        }
+                        insert_res = db["detection_events"].insert_one(new_ev)
+                        self._open_event_id = insert_res.inserted_id
+
+                        # Check if Cloud Theft API is active for this camera
+                        cam_rec = find_camera_by_id(self.camera_id)
+                        if cam_rec and cam_rec.get("theft_active", False):
+                            setting = db["system_settings"].find_one({"key": "cloud_trigger_url"})
+                            trigger_url = setting.get("value") if setting else "http://13.48.57.153:8000/api/trigger/"
+
+                            def _trigger_cloud():
+                                try:
+                                    print(f"[MotionWorker] Triggering Cloud Theft AI for {self.camera_name} to {trigger_url}")
+                                    res = requests.post(trigger_url, data={
+                                        "shop_name": shop_name,
+                                        "camera_name": self.camera_name,
+                                        "model_name": "theft"
+                                    }, timeout=5)
+                                    if res.status_code == 200:
+                                        t_now = datetime.utcnow()
+                                        db["detection_events"].insert_one({
+                                            "event_id": get_next_sequence("event_id"),
+                                            "camera_id": self.camera_id,
+                                            "shop_id": self.shop_id,
                                             "shop_name": shop_name,
                                             "camera_name": self.camera_name,
-                                            "model_name": "theft"
-                                        }, timeout=5)
-                                        if res.status_code == 200:
-                                            # Log a successful API trigger event
-                                            edb = SessionLocal()
-                                            try:
-                                                api_ev = DetectionEvent(
-                                                    camera_id=self.camera_id,
-                                                    shop_id=self.shop_id,
-                                                    shop_name=shop_name,
-                                                    camera_name=self.camera_name,
-                                                    detection_type="cloud_trigger",
-                                                    confidence=1.0,
-                                                    ended_at=datetime.utcnow()
-                                                )
-                                                edb.add(api_ev)
-                                                edb.commit()
-                                            finally:
-                                                edb.close()
-                                    except Exception as e:
-                                        print(f"[MotionWorker] Cloud Theft API trigger failed: {e}")
-                                threading.Thread(target=_trigger_cloud, daemon=True).start()
-                        finally:
-                            db.close()
+                                            "detection_type": "cloud_trigger",
+                                            "confidence": 1.0,
+                                            "detected_at": t_now,
+                                            "ended_at": t_now,
+                                            "metadata": {}
+                                        })
+                                except Exception as e:
+                                    print(f"[MotionWorker] Cloud Theft API trigger failed: {e}")
+
+                            threading.Thread(target=_trigger_cloud, daemon=True).start()
+
                         self._last_event_at = now
                 else:
                     if self._open_event_id:
-                        db = SessionLocal()
-                        try:
-                            ev = db.query(DetectionEvent).filter(
-                                DetectionEvent.id == self._open_event_id
-                            ).first()
-                            if ev and ev.ended_at is None:
-                                ev.ended_at = now
-                                db.commit()
-                        finally:
-                            db.close()
+                        db["detection_events"].update_one(
+                            {"_id": self._open_event_id, "ended_at": None},
+                            {"$set": {"ended_at": now}}
+                        )
                         self._open_event_id = None
 
         except Exception as exc:
             self.error_msg = str(exc)
             self.stream_ok = False
-            print(f"[MotionWorker cam={self.camera_id}] crashed: {exc}")
         finally:
-            if 'cap' in locals():
+            if 'cap' in locals() and cap is not None:
                 cap.release()
+            if self._open_event_id:
+                try:
+                    db["detection_events"].update_one(
+                        {"_id": self._open_event_id, "ended_at": None},
+                        {"$set": {"ended_at": datetime.utcnow()}}
+                    )
+                except Exception:
+                    pass
             self.running = False
 
 
 class MotionWorkerManager:
-    """Manages one MotionWorker thread per camera."""
-
     def __init__(self):
-        self._workers: dict[int, MotionWorker] = {}
+        self._workers = {}
+        self._lock = threading.Lock()
 
-    def start(self, camera_id: int, rtsp_url: str, shop_id: int, camera_name: str):
-        self.stop(camera_id)
-        w = MotionWorker(camera_id, rtsp_url, shop_id, camera_name)
-        w.start()
-        self._workers[camera_id] = w
+    def start(self, camera_id: int, rtsp_url: str, shop_id: int, camera_name: str) -> None:
+        cid = int(camera_id)
+        with self._lock:
+            existing = self._workers.get(cid)
+            if existing and existing.running:
+                return
+            w = MotionWorker(cid, rtsp_url, shop_id, camera_name)
+            self._workers[cid] = w
+            w.start()
 
-    def stop(self, camera_id: int):
-        w = self._workers.pop(camera_id, None)
-        if w:
-            w.stop()
+    def stop(self, camera_id: int) -> None:
+        cid = int(camera_id)
+        with self._lock:
+            w = self._workers.pop(cid, None)
+            if w:
+                w.stop()
 
     def get_status(self, camera_id: int) -> dict:
-        w = self._workers.get(camera_id)
-        if w:
+        cid = int(camera_id)
+        with self._lock:
+            w = self._workers.get(cid)
+            if not w:
+                return {"running": False, "error": None, "stream_ok": None}
             return {
                 "running": w.running,
                 "error": w.error_msg,
                 "stream_ok": w.stream_ok,
             }
-        return {"running": False, "error": None, "stream_ok": None}
 
-    def all_statuses(self) -> dict[int, dict]:
-        return {
-            cid: {
-                "running": w.running,
-                "error": w.error_msg,
-                "stream_ok": w.stream_ok,
+    def running_camera_ids(self) -> list:
+        with self._lock:
+            return [cid for cid, w in self._workers.items() if w.running and not w.error_msg]
+
+    def error_camera_ids(self) -> list:
+        with self._lock:
+            return [cid for cid, w in self._workers.items() if w.error_msg is not None]
+
+    def all_statuses(self) -> dict:
+        with self._lock:
+            return {
+                cid: {
+                    "running": w.running,
+                    "error": w.error_msg,
+                    "stream_ok": w.stream_ok,
+                }
+                for cid, w in self._workers.items()
             }
-            for cid, w in self._workers.items()
-        }
-
-    def running_camera_ids(self) -> list[int]:
-        return [cid for cid, w in self._workers.items() if w.running]
-
-    def error_camera_ids(self) -> list[int]:
-        return [cid for cid, w in self._workers.items()
-                if not w.running and w.error_msg]

@@ -1,72 +1,55 @@
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, Form, File
-import asyncio
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from typing import List, Optional
 import psutil
-import socket
-import urllib.parse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, timedelta
-from app.database import get_db
-from app.models.all_models import Shop, Camera, DetectionEvent, ModelType, CameraModelAssignment, Model, SystemSetting
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import cv2
+import os
+
+from app.database import get_db, find_all_cameras, update_camera_by_id
 from app.workers.worker_manager import manager
-import psutil
-import threading
-import time
-
-_cached_cpu_percent = 0.0
-def _cpu_poller():
-    global _cached_cpu_percent
-    # Give psutil an initial meaningless read, then poll every 2 seconds
-    psutil.cpu_percent(interval=None)
-    while True:
-        _cached_cpu_percent = psutil.cpu_percent(interval=2.0)
-
-_poller_thread = threading.Thread(target=_cpu_poller, daemon=True)
-_poller_thread.start()
-
-router = APIRouter(
-    prefix="/api/dashboard",
-    tags=["dashboard"]
-)
-
-# Shared with worker_api — import via module to stay in-sync
-# (both modules use the same process so singleton objects match)
+from app.workers.motion_worker import MotionWorkerManager
 from app.routers.worker_api import motion_manager as _motion_manager
 from app.routers.trigger_api import active_cloud_workers
 
+router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
-def _rtsp_reachable(rtsp_url: str, timeout: float = 2.5) -> bool:
-    """
-    Try a TCP connection to the RTSP host:port.
-    Returns True if the TCP handshake succeeds (stream is reachable).
-    """
-    try:
-        parsed = urllib.parse.urlparse(rtsp_url)
-        host = parsed.hostname
-        port = parsed.port or 554
-        if not host:
-            return False
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except Exception:
+_cached_cpu_percent = 0.0
+
+async def update_cpu_cache():
+    global _cached_cpu_percent
+    while True:
+        try:
+            _cached_cpu_percent = await asyncio.to_thread(psutil.cpu_percent, 1.0)
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+
+@router.on_event("startup")
+async def start_background_monitoring():
+    asyncio.create_task(update_cpu_cache())
+
+def _test_rtsp_connection(rtsp_url: str) -> bool:
+    if not rtsp_url:
         return False
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;2000000|rtsp_transport;tcp"
+    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        return False
+    ret, _ = cap.read()
+    cap.release()
+    return ret
 
-
-def _check_cameras_parallel(cameras, timeout: float = 2.5):
-    """
-    Check all cameras in parallel (up to 20 threads) so the stats
-    endpoint stays fast even with many cameras.
-    Returns (online_count, offline_count, per_camera_status dict).
-    """
+def get_actual_camera_statuses(cameras):
     results = {}
-    with ThreadPoolExecutor(max_workers=min(20, len(cameras) or 1)) as ex:
+    with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_id = {
-            ex.submit(_rtsp_reachable, cam.rtsp_url, timeout): cam.id
+            executor.submit(_test_rtsp_connection, cam.get("rtsp_url") or cam.get("source", "")): cam.get("id")
             for cam in cameras
         }
-        for future in as_completed(future_to_id):
+        for future in future_to_id:
             cam_id = future_to_id[future]
             try:
                 results[cam_id] = future.result()
@@ -77,11 +60,11 @@ def _check_cameras_parallel(cameras, timeout: float = 2.5):
     offline = len(results) - online
     return online, offline, results
 
-
 @router.get("/stats")
-def get_dashboard_stats(db: Session = Depends(get_db)):
-    shops_count = db.query(Shop).count()
-    cameras_count = db.query(Camera).count()
+def get_dashboard_stats(db = Depends(get_db)):
+    shops_count = db["shops"].count_documents({})
+    all_cams = find_all_cameras()
+    cameras_count = len(all_cams)
 
     from app.utils.settings import get_server_mode
     server_mode = get_server_mode()
@@ -92,107 +75,97 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
 
     if server_mode == "cloud":
         try:
-            # Safely create a list from items to prevent dictionary changed size errors
             items = list(active_cloud_workers.items())
             dead_keys = [k for k, w in items if not w.is_alive()]
             for k in dead_keys:
                 if k in active_cloud_workers:
                     del active_cloud_workers[k]
         except RuntimeError:
-            pass # Ignore if it mutates concurrently, it will be cleaned up next time
+            pass
         
         active_trigger_cams = {cam_id for (cam_id, _), w in list(active_cloud_workers.items()) if w.is_alive()}
         cameras_online = len(active_trigger_cams)
         cameras_error = 0
         cameras_offline = cameras_count - cameras_online
     else:
-        # Per-camera state from motion workers: running / error / not started
         all_statuses = _motion_manager.all_statuses()
         motion_running = set(_motion_manager.running_camera_ids())
         motion_error   = set(_motion_manager.error_camera_ids())
         yolo_running   = {cid for cid, w in manager.workers.items() if w.running}
 
         cameras_online  = len((motion_running | yolo_running))
-        cameras_error   = len(motion_error - yolo_running)   # errored and no YOLO worker covering it
-        cameras_offline = cameras_count - cameras_online - cameras_error
+        cameras_error   = len(motion_error - yolo_running)
+        cameras_offline = max(0, cameras_count - cameras_online - cameras_error)
 
-    today = date.today()
-    detections = db.query(
-        DetectionEvent.detection_type,
-        func.count(DetectionEvent.id)
-    ).filter(
-        func.date(DetectionEvent.detected_at) == today
-    ).group_by(DetectionEvent.detection_type).all()
+    # Today's date boundary
+    today_start = datetime.combine(date.today(), datetime.min.time())
+    today_end = today_start + timedelta(days=1)
+    
+    # Aggregation for today's detection counts
+    pipeline = [
+        {"$match": {"detected_at": {"$gte": today_start, "$lt": today_end}}},
+        {"$group": {"_id": "$detection_type", "count": {"$sum": 1}}}
+    ]
+    detections = db["detection_events"].aggregate(pipeline)
+    detection_counts = {item["_id"]: item["count"] for item in detections if item["_id"]}
 
-    detection_counts = {dt: count for dt, count in detections}
-
-    # Motion card = number of cameras currently actively detecting motion
+    # Motion card = number of cameras currently actively detecting motion (within last 1 min)
     one_min_ago = datetime.utcnow() - timedelta(minutes=1)
-    active_motion_count = db.query(DetectionEvent.camera_id).filter(
-        DetectionEvent.detection_type == "motion",
-        DetectionEvent.ended_at.is_(None),
-        DetectionEvent.detected_at >= one_min_ago
-    ).distinct().count()
+    active_motion_cams = db["detection_events"].distinct(
+        "camera_id",
+        {"detection_type": "motion", "ended_at": None, "detected_at": {"$gte": one_min_ago}}
+    )
+    active_motion_count = len(active_motion_cams)
     detection_counts['Motion'] = active_motion_count
     if 'motion' in detection_counts:
         del detection_counts['motion']
 
-    # Detailed detections based on ModelTypes + 'motion' fallback
+    # Detailed detections based on ModelTypes
     detailed_detections = []
-    
-    # Get all model types from DB
-    model_types = db.query(ModelType).all()
-    
-    # We always ensure 'motion' is included as a core type
+    model_types = list(db["model_types"].find())
     core_motion_added = False
     
     for mt in model_types:
-        if mt.name == 'mog2' or mt.name == 'motion':
+        mt_name = mt.get("name")
+        display_name = mt.get("display_name")
+        if mt_name in ('mog2', 'motion'):
             core_motion_added = True
-            cameras_running = len(motion_running)
-        else:
-            cameras_running = db.query(CameraModelAssignment).join(Model).filter(
-                Model.type == mt.name,
-                CameraModelAssignment.is_running == True
-            ).count()
-            
-        # The database saves motion events as "motion", even if the model type name is "mog2"
-        # and it saves human detection events as "human", even if the model type is "yolo_human".
-        if mt.name in ("mog2", "motion"):
+            cameras_running_count = len(motion_running)
             actual_type = "motion"
-        elif mt.name == "yolo_human":
+        elif mt_name == "yolo_human":
             actual_type = "human"
+            cameras_running_count = db["camera_model_assignments"].count_documents({
+                "is_running": True
+            })
         else:
-            actual_type = mt.name
+            actual_type = mt_name
+            cameras_running_count = db["camera_model_assignments"].count_documents({
+                "is_running": True
+            })
 
-        # Get total for today (still available in backend just in case)
-        total = db.query(func.count(DetectionEvent.id)).filter(
-            DetectionEvent.detection_type == actual_type,
-            func.date(DetectionEvent.detected_at) == today
-        ).scalar() or 0
+        total = db["detection_events"].count_documents({
+            "detection_type": actual_type,
+            "detected_at": {"$gte": today_start, "$lt": today_end}
+        })
         
-        # Get detected now (ongoing events)
-        active = db.query(DetectionEvent.camera_id).filter(
-            DetectionEvent.detection_type == actual_type,
-            DetectionEvent.ended_at.is_(None),
-            DetectionEvent.detected_at >= one_min_ago
-        ).distinct().count()
+        active_cams = db["detection_events"].distinct(
+            "camera_id",
+            {"detection_type": actual_type, "ended_at": None, "detected_at": {"$gte": one_min_ago}}
+        )
         
         detailed_detections.append({
-            "type": mt.name,
-            "display_name": mt.display_name,
-            "active_now": active,
+            "type": mt_name,
+            "display_name": display_name,
+            "active_now": len(active_cams),
             "total_today": total,
-            "cameras_running": cameras_running
+            "cameras_running": cameras_running_count
         })
 
     if not core_motion_added:
-        # Get total for today for generic 'motion'
-        mot_total = db.query(func.count(DetectionEvent.id)).filter(
-            DetectionEvent.detection_type == 'motion',
-            func.date(DetectionEvent.detected_at) == today
-        ).scalar() or 0
-        
+        mot_total = db["detection_events"].count_documents({
+            "detection_type": "motion",
+            "detected_at": {"$gte": today_start, "$lt": today_end}
+        })
         detailed_detections.insert(0, {
             "type": "motion",
             "display_name": "Motion",
@@ -200,7 +173,6 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
             "total_today": mot_total,
             "cameras_running": len(motion_running)
         })
-    # Removed theft detection append
 
     cpu_percent = _cached_cpu_percent
     ram = psutil.virtual_memory()
@@ -220,12 +192,10 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         pass
 
     def _get_gpu_percent():
-        # 1) Try NVIDIA via nvidia-smi (GTX 1660 SUPER)
         try:
             import subprocess
             result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=utilization.gpu",
-                 "--format=csv,noheader,nounits"],
+                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
                 capture_output=True, text=True, timeout=2
             )
             if result.returncode == 0:
@@ -233,172 +203,114 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
                 return float(val)
         except Exception:
             pass
-        # 2) Fallback: AMD sysfs (iGPU)
-        try:
-            import glob
-            gpu_files = glob.glob("/sys/class/drm/card*/device/gpu_busy_percent")
-            if gpu_files:
-                with open(gpu_files[0], "r") as f:
-                    return float(f.read().strip())
-        except Exception:
-            pass
         return 0.0
 
     def _get_gpu_memory():
-        """Returns (used_mb, total_mb) for NVIDIA GPU."""
         try:
             import subprocess
             result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=memory.used,memory.total",
-                 "--format=csv,noheader,nounits"],
+                ["nvidia-smi", "--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"],
                 capture_output=True, text=True, timeout=2
             )
             if result.returncode == 0:
-                parts = result.stdout.strip().split(",")
-                return int(parts[0].strip()), int(parts[1].strip())
+                parts = result.stdout.strip().split("\n")[0].split(",")
+                return float(parts[0].strip()), float(parts[1].strip())
         except Exception:
             pass
-        return 0, 0
-
-    def _get_npu_percent():
-        return 0.0
+        return 0.0, 0.0
 
     gpu_percent = _get_gpu_percent()
-    npu_percent = _get_npu_percent()
-    gpu_mem_used, gpu_mem_total = _get_gpu_memory()
+    gpu_used_mb, gpu_total_mb = _get_gpu_memory()
 
-    from app.utils.settings import get_server_mode
     return {
         "shops_count": shops_count,
         "cameras_count": cameras_count,
         "cameras_online": cameras_online,
         "cameras_offline": cameras_offline,
         "cameras_error": cameras_error,
-        "detections": detection_counts,
+        "detection_counts": detection_counts,
         "detailed_detections": detailed_detections,
-        "server_mode": server_mode,
         "system": {
             "cpu_percent": cpu_percent,
-            "gpu_percent": gpu_percent,
-            "gpu_mem_used_mb": gpu_mem_used,
-            "gpu_mem_total_mb": gpu_mem_total,
-            "npu_percent": npu_percent,
             "ram_percent": ram_percent,
             "ram_used_gb": ram_used_gb,
+            "gpu_percent": gpu_percent,
+            "gpu_used_mb": gpu_used_mb,
+            "gpu_total_mb": gpu_total_mb,
             "temperature": temperature
         }
     }
 
-
 @router.get("/camera-status")
-def get_camera_status(db: Session = Depends(get_db)):
-    """
-    Per-camera status: online / error / offline.
-    Uses motion worker state (stream_ok + error_msg) — fast, no new TCP probe.
-    """
-    cameras = db.query(Camera).filter(Camera.is_active == True).all()
-    all_statuses = _motion_manager.all_statuses()
-    result = {}
-    for cam in cameras:
-        w = all_statuses.get(cam.id, {})
-        if w.get("running"):
-            state = "online"
-        elif w.get("error"):
-            state = "error"
-        else:
-            state = "offline"
-        result[cam.id] = {
-            "online": state == "online",
-            "state": state,
-            "error": w.get("error")
-        }
-    return result
+def get_camera_status():
+    all_cams = find_all_cameras()
+    online, offline, detailed = get_actual_camera_statuses(all_cams)
+    return {
+        "total": len(all_cams),
+        "online": online,
+        "offline": offline,
+        "cameras": detailed
+    }
 
-
-@router.get("/motion-status")
-def get_all_camera_motion_status(db: Session = Depends(get_db)):
-    """
-    Returns EVERY active camera (all shops), each with its current motion
-    state — not just cameras that already have a stored detection event.
-
-    For a camera that is currently detecting motion (an open DetectionEvent
-    with ended_at IS NULL), we return active=True plus the start time.
-    For every other camera we return active=False with no start time,
-    so the popup always lists all cameras (e.g. 10/10) instead of only
-    the ones that happen to have history.
-    """
-    cameras = (
-        db.query(Camera)
-        .filter(Camera.is_active == True)
-        .join(Shop, Camera.shop_id == Shop.id)
-        .all()
-    )
-
-    # Open (ongoing) motion events, most recent first
+@router.get("/camera-motion-status")
+def get_all_camera_motion_status(db = Depends(get_db)):
     one_min_ago = datetime.utcnow() - timedelta(minutes=1)
-    open_events = (
-        db.query(DetectionEvent)
-        .filter(
-            DetectionEvent.detection_type == "motion",
-            DetectionEvent.ended_at.is_(None),
-            DetectionEvent.detected_at >= one_min_ago
-        )
-        .order_by(DetectionEvent.detected_at.desc())
-        .all()
-    )
-    open_by_camera = {}
-    for ev in open_events:
-        if ev.camera_id not in open_by_camera:
-            open_by_camera[ev.camera_id] = ev
+    all_cams = find_all_cameras()
+    
+    recent_events = db["detection_events"].find({
+        "detection_type": "motion",
+        "ended_at": None,
+        "detected_at": {"$gte": one_min_ago}
+    })
+    active_ev_map = {ev.get("camera_id"): ev for ev in recent_events}
 
     result = []
-    for cam in cameras:
-        ev = open_by_camera.get(cam.id)
+    for cam in all_cams:
+        cid = cam.get("id")
+        ev = active_ev_map.get(cid)
         result.append({
-            "camera_id": cam.id,
-            "camera_name": cam.name,
-            "shop_id": cam.shop_id,
-            "shop_name": cam.shop.name if cam.shop else "-",
+            "camera_id": cid,
+            "camera_name": cam.get("name"),
+            "shop_id": cam.get("shop_id"),
+            "shop_name": cam.get("shop_name", "-"),
             "active": ev is not None,
-            "started_at": ev.detected_at if ev else None,
+            "started_at": ev.get("detected_at") if ev else None,
         })
 
     result.sort(key=lambda r: (r["shop_name"] or "", r["camera_name"] or ""))
     return result
 
-
 @router.get("/detections")
-def get_recent_detections(type: str = None, date_str: str = None, limit: int = 50, active_only: bool = False, db: Session = Depends(get_db)):
-    query = db.query(DetectionEvent)
-
+def get_recent_detections(type: str = None, date_str: str = None, limit: int = 50, active_only: bool = False, db = Depends(get_db)):
+    query = {}
     if type:
-        query = query.filter(func.lower(DetectionEvent.detection_type) == type.lower())
+        query["detection_type"] = {"$regex": f"^{type}$", "$options": "i"}
 
     if active_only:
         one_min_ago = datetime.utcnow() - timedelta(minutes=1)
-        query = query.filter(
-            DetectionEvent.ended_at.is_(None),
-            DetectionEvent.detected_at >= one_min_ago
-        )
+        query["ended_at"] = None
+        query["detected_at"] = {"$gte": one_min_ago}
 
     if date_str:
         try:
             target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            query = query.filter(func.date(DetectionEvent.detected_at) == target_date)
+            start = datetime.combine(target_date, datetime.min.time())
+            end = start + timedelta(days=1)
+            query["detected_at"] = {"$gte": start, "$lt": end}
         except ValueError:
             pass
 
-    events = query.order_by(DetectionEvent.detected_at.desc()).limit(limit).all()
+    events = db["detection_events"].find(query).sort("detected_at", -1).limit(limit)
 
     return [
         {
-            "id": e.id,
-            "camera_name": e.camera_name,
-            "shop_name": e.shop_name,
-            "detected_at": e.detected_at,
-            "ended_at": e.ended_at,
-            "detection_type": e.detection_type,
-            "metadata": e.metadata_
+            "id": e.get("event_id") or str(e["_id"]),
+            "camera_name": e.get("camera_name"),
+            "shop_name": e.get("shop_name"),
+            "detected_at": e.get("detected_at"),
+            "ended_at": e.get("ended_at"),
+            "detection_type": e.get("detection_type"),
+            "metadata": e.get("metadata")
         } for e in events
     ]
 
@@ -406,19 +318,23 @@ class ReviewUpdate(BaseModel):
     review_state: str
 
 @router.post("/detections/{event_id}/review")
-def update_detection_review(event_id: int, payload: ReviewUpdate, db: Session = Depends(get_db)):
-    event = db.query(DetectionEvent).filter(DetectionEvent.id == event_id).first()
-    if not event:
+def update_detection_review(event_id: str, payload: ReviewUpdate, db = Depends(get_db)):
+    from bson import ObjectId
+    q = {}
+    try:
+        q = {"_id": ObjectId(event_id)}
+    except Exception:
+        try:
+            q = {"event_id": int(event_id)}
+        except Exception:
+            q = {"event_id": event_id}
+
+    res = db["detection_events"].update_one(
+        q,
+        {"$set": {"metadata.review_state": payload.review_state}}
+    )
+    if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")
-    
-    meta = event.metadata_ or {}
-    meta["review_state"] = payload.review_state
-    
-    event.metadata_ = meta
-    from sqlalchemy.orm.attributes import flag_modified
-    flag_modified(event, "metadata_")
-    
-    db.commit()
     return {"status": "success", "review_state": payload.review_state}
 
 @router.post("/test-video")
@@ -427,9 +343,7 @@ async def test_video_pipeline(
     camera_name: str = Form(...),
     video: UploadFile = File(...),
 ):
-    # Simulate processing time
     await asyncio.sleep(2)
-    # Return dummy detection result
     return {
         "status": "success",
         "score": 0.89,
@@ -447,7 +361,7 @@ class SettingsUpdate(BaseModel):
     server_mode: str
 
 @router.post("/settings")
-def update_dashboard_settings(payload: SettingsUpdate, db: Session = Depends(get_db)):
+def update_dashboard_settings(payload: SettingsUpdate):
     if payload.server_mode not in ["standalone", "cloud"]:
         raise HTTPException(status_code=400, detail="Invalid server mode")
         
@@ -455,25 +369,17 @@ def update_dashboard_settings(payload: SettingsUpdate, db: Session = Depends(get
     set_server_mode(payload.server_mode)
     
     if old_mode != payload.server_mode:
-        active_cameras = db.query(Camera).filter(Camera.is_active == True).all()
+        active_cameras = find_all_cameras(filter_active_only=True)
         
         if payload.server_mode == "cloud":
-            # Stop all continuous workers
             for cam in active_cameras:
-                _motion_manager.stop(cam.id)
-                manager.stop_worker(cam.id)
+                _motion_manager.stop(cam["id"])
+                manager.stop_worker(cam["id"])
         elif payload.server_mode == "standalone":
-            # Start continuous workers
             for cam in active_cameras:
-                if getattr(cam, 'motion_active', False):
-                    _motion_manager.start(cam.id, cam.rtsp_url, cam.shop_id, cam.name)
-                
-                running_assignments = db.query(CameraModelAssignment).filter(
-                    CameraModelAssignment.camera_id == cam.id,
-                    CameraModelAssignment.is_running == True
-                ).count()
-                if running_assignments > 0:
-                    manager.start_worker(cam.id)
+                if cam.get('motion_active', False):
+                    rtsp = cam.get("rtsp_url") or cam.get("source", "")
+                    _motion_manager.start(cam["id"], rtsp, cam.get("shop_id"), cam.get("name"))
                     
     return {"status": "success", "server_mode": payload.server_mode}
 
@@ -481,17 +387,15 @@ class SystemSettingsUpdate(BaseModel):
     cloud_trigger_url: str
 
 @router.get("/system_settings")
-def get_system_settings(db: Session = Depends(get_db)):
-    setting = db.query(SystemSetting).filter_by(key="cloud_trigger_url").first()
-    return {"cloud_trigger_url": setting.value if setting else "http://13.48.57.153:8000/api/trigger/"}
+def get_system_settings(db = Depends(get_db)):
+    setting = db["system_settings"].find_one({"key": "cloud_trigger_url"})
+    return {"cloud_trigger_url": setting.get("value") if setting else "http://13.48.57.153:8000/api/trigger/"}
 
 @router.post("/system_settings")
-def update_system_settings(payload: SystemSettingsUpdate, db: Session = Depends(get_db)):
-    setting = db.query(SystemSetting).filter_by(key="cloud_trigger_url").first()
-    if not setting:
-        setting = SystemSetting(key="cloud_trigger_url", value=payload.cloud_trigger_url)
-        db.add(setting)
-    else:
-        setting.value = payload.cloud_trigger_url
-    db.commit()
-    return {"status": "success", "cloud_trigger_url": setting.value}
+def update_system_settings(payload: SystemSettingsUpdate, db = Depends(get_db)):
+    db["system_settings"].update_one(
+        {"key": "cloud_trigger_url"},
+        {"$set": {"value": payload.cloud_trigger_url, "updated_at": datetime.utcnow()}},
+        upsert=True
+    )
+    return {"status": "success", "cloud_trigger_url": payload.cloud_trigger_url}

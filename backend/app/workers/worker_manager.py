@@ -1,6 +1,5 @@
 from app.workers.camera_worker import CameraWorker
-from app.database import SessionLocal
-from app.models.all_models import CameraModelAssignment, Model
+from app.database import get_db
 
 class WorkerManager:
     def __init__(self):
@@ -15,12 +14,11 @@ class WorkerManager:
         while True:
             time.sleep(60)
             if get_server_mode() == "cloud":
-                continue # Do not restart continuous workers in cloud mode
+                continue
             try:
                 all_cams = set(self.workers.keys())
                 for cam_id in list(all_cams):
                     w = self.workers.get(cam_id)
-                    
                     if w and not w.running:
                         print(f"[WATCHDOG] Detected dead worker for Camera {cam_id}. Restarting...", flush=True)
                         del self.workers[cam_id]
@@ -29,46 +27,35 @@ class WorkerManager:
                 print(f"[WATCHDOG] Error: {e}", flush=True)
 
     def start_worker(self, camera_id: int):
-        db = SessionLocal()
-        try:
-            # We don't check assignments directly here anymore, just start the standard worker.
-            pass
-        finally:
-            db.close()
-            
-        if camera_id not in self.workers or not self.workers[camera_id].running:
-            worker = CameraWorker(camera_id=camera_id)
+        cid = int(camera_id)
+        if cid not in self.workers or not self.workers[cid].running:
+            worker = CameraWorker(camera_id=cid)
             worker.daemon = True
             worker.start()
-            self.workers[camera_id] = worker
-            
+            self.workers[cid] = worker
         return True
 
     def stop_worker(self, camera_id: int):
-        db = SessionLocal()
-        any_assigned = False
-        try:
-            assignments = db.query(CameraModelAssignment).join(Model).filter(
-                CameraModelAssignment.camera_id == camera_id,
-                CameraModelAssignment.is_running == True
-            ).all()
-            if assignments:
-                any_assigned = True
-        finally:
-            db.close()
+        cid = int(camera_id)
+        db = get_db()
+        any_assigned = db["camera_model_assignments"].count_documents({
+            "camera_id": cid,
+            "is_running": True
+        }) > 0
             
         if not any_assigned:
-            if camera_id in self.workers:
-                self.workers[camera_id].stop()
-                self.workers[camera_id].join(timeout=2.0)
-                del self.workers[camera_id]
+            if cid in self.workers:
+                self.workers[cid].stop()
+                self.workers[cid].join(timeout=2.0)
+                del self.workers[cid]
                 
         return True
 
     def get_status(self, camera_id: int):
+        cid = int(camera_id)
         status = {"running": False, "error": None}
-        if camera_id in self.workers:
-            worker = self.workers[camera_id]
+        if cid in self.workers:
+            worker = self.workers[cid]
             status["running"] = worker.running
             status["error"] = worker.error_msg
             
