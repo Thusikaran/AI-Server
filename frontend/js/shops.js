@@ -39,18 +39,22 @@ async function loadShops() {
             if (stateRes.ok) serverCameraStates = await stateRes.json();
         } catch (err) { }
 
-        allShopsData = [];
-        for (let shop of shops) {
-            const camRes = await fetch(`${API_BASE}/shops/${shop.id}/cameras`);
-            const cameras = await camRes.json();
-            allShopsData.push({ shop, cameras });
+        // Fetch all cameras in parallel
+        const shopCamPromises = shops.map(async (shop) => {
+            try {
+                const camRes = await fetch(`${API_BASE}/shops/${shop.id}/cameras`);
+                const cameras = await camRes.json();
+                cameras.forEach(cam => {
+                    cameraState[cam.id] = serverCameraStates[cam.id] || { motion: false };
+                });
+                return { shop, cameras };
+            } catch (err) {
+                return { shop, cameras: [] };
+            }
+        });
 
-            cameras.forEach(cam => {
-                cameraState[cam.id] = serverCameraStates[cam.id] || { motion: false };
-            });
-        }
+        allShopsData = await Promise.all(shopCamPromises);
         renderShopList();
-        // Fetch live status badges after rendering
         refreshCameraStatus();
     } catch (e) {
         console.error("Failed to load shops", e);

@@ -61,30 +61,23 @@ def serialize_docs(docs) -> List[Dict[str, Any]]:
 def find_all_cameras(filter_active_only: bool = False) -> List[Dict[str, Any]]:
     """
     Extracts all cameras across all shops from the embedded shops.cameras array.
+    Uses direct find for fast single-roundtrip performance on MongoDB Atlas.
     """
-    pipeline = [
-        {"$unwind": "$cameras"},
-        {
-            "$project": {
-                "_id": 0,
-                "shop_id": "$shop_id",
-                "shop_name": "$name",
-                "camera": "$cameras"
-            }
-        }
-    ]
+    shops = db["shops"].find({}, {"shop_id": 1, "name": 1, "cameras": 1})
     cameras = []
-    for item in db["shops"].aggregate(pipeline):
-        cam = item.get("camera", {})
-        cam["shop_id"] = item.get("shop_id")
-        cam["shop_name"] = item.get("shop_name")
-        # Ensure id and camera_id are synchronized
-        cam_id = cam.get("camera_id") or cam.get("id")
-        cam["id"] = cam_id
-        cam["camera_id"] = cam_id
-        if filter_active_only and not cam.get("is_active", True):
-            continue
-        cameras.append(cam)
+    for s in shops:
+        sid = s.get("shop_id") or s.get("id")
+        sname = s.get("name")
+        for cam in s.get("cameras", []):
+            cid = cam.get("camera_id") or cam.get("id")
+            c = dict(cam)
+            c["shop_id"] = sid
+            c["shop_name"] = sname
+            c["id"] = cid
+            c["camera_id"] = cid
+            if filter_active_only and not c.get("is_active", True):
+                continue
+            cameras.append(c)
     return cameras
 
 def find_camera_by_id(camera_id: int) -> Optional[Dict[str, Any]]:

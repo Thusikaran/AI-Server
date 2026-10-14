@@ -120,6 +120,22 @@ def get_dashboard_stats(db = Depends(get_db)):
     if 'motion' in detection_counts:
         del detection_counts['motion']
 
+    # Pre-fetch running assignments count in 1 query
+    running_assignments_count = db["camera_model_assignments"].count_documents({"is_running": True})
+
+    # Pre-fetch all active events in the last 1 minute in 1 query
+    recent_active_events = list(db["detection_events"].find(
+        {"ended_at": None, "detected_at": {"$gte": one_min_ago}},
+        {"camera_id": 1, "detection_type": 1}
+    ))
+    active_by_type = {}
+    for ev in recent_active_events:
+        dt = ev.get("detection_type")
+        cid = ev.get("camera_id")
+        if dt not in active_by_type:
+            active_by_type[dt] = set()
+        active_by_type[dt].add(cid)
+
     # Detailed detections based on ModelTypes
     detailed_detections = []
     model_types = list(db["model_types"].find())
@@ -134,42 +150,28 @@ def get_dashboard_stats(db = Depends(get_db)):
             actual_type = "motion"
         elif mt_name == "yolo_human":
             actual_type = "human"
-            cameras_running_count = db["camera_model_assignments"].count_documents({
-                "is_running": True
-            })
+            cameras_running_count = running_assignments_count
         else:
             actual_type = mt_name
-            cameras_running_count = db["camera_model_assignments"].count_documents({
-                "is_running": True
-            })
+            cameras_running_count = running_assignments_count
 
-        total = db["detection_events"].count_documents({
-            "detection_type": actual_type,
-            "detected_at": {"$gte": today_start, "$lt": today_end}
-        })
-        
-        active_cams = db["detection_events"].distinct(
-            "camera_id",
-            {"detection_type": actual_type, "ended_at": None, "detected_at": {"$gte": one_min_ago}}
-        )
+        total = detection_counts.get(actual_type, 0)
+        active_now = len(active_by_type.get(actual_type, set()))
         
         detailed_detections.append({
             "type": mt_name,
             "display_name": display_name,
-            "active_now": len(active_cams),
+            "active_now": active_now,
             "total_today": total,
             "cameras_running": cameras_running_count
         })
 
     if not core_motion_added:
-        mot_total = db["detection_events"].count_documents({
-            "detection_type": "motion",
-            "detected_at": {"$gte": today_start, "$lt": today_end}
-        })
+        mot_total = detection_counts.get("motion", 0)
         detailed_detections.insert(0, {
             "type": "motion",
             "display_name": "Motion",
-            "active_now": active_motion_count,
+            "active_now": len(active_by_type.get("motion", set())),
             "total_today": mot_total,
             "cameras_running": len(motion_running)
         })
