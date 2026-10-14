@@ -19,3 +19,4 @@ paho-mqtt>=2.0
 onnxruntime-rocm
 onnxruntime-rocm>=1.15.0
 onnx
+pymongo[srv]
