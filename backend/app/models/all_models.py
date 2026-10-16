@@ -1,8 +1,9 @@
 from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey, DateTime, UniqueConstraint
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB
-from app.database import Base
+
+Base = declarative_base()
 
 class ModelType(Base):
     __tablename__ = "model_types"
@@ -10,6 +11,10 @@ class ModelType(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), unique=True, nullable=False)
     display_name = Column(String(100), nullable=False)
+    icon = Column(String(100), default="fa-cube")
+    default_threshold = Column(Float, default=0.50)
+    default_tracking = Column(Boolean, default=True)
+    default_cooldown = Column(Integer, default=10)
 
 class Shop(Base):
     __tablename__ = "shops"
@@ -49,6 +54,10 @@ class Model(Base):
     file_path = Column(String)
     status = Column(String(50), default="pending")
     is_default = Column(Boolean, default=False)
+    confidence_threshold = Column(Float, default=0.50)
+    tracking_enabled = Column(Boolean, default=True)
+    cooldown_seconds = Column(Integer, default=10)
+    icon = Column(String(100), default="fa-cube")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class CameraModelAssignment(Base):
@@ -78,6 +87,8 @@ class DetectionEvent(Base):
     ended_at = Column(DateTime(timezone=True))
     detection_type = Column(String(100))
     confidence = Column(Float)
+    snapshot_path = Column(String(500), nullable=True)
+    track_id = Column(Integer, nullable=True)
     metadata_ = Column("metadata", JSONB)
 
 class ModelVersion(Base):

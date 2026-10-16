@@ -24,7 +24,9 @@ app.include_router(dashboard.router)
 app.include_router(trigger_api.router)
 
 os.makedirs("/app/uploads", exist_ok=True)
+os.makedirs("/app/uploads/snapshots", exist_ok=True)
 app.mount("/api/uploads", StaticFiles(directory="/app/uploads"), name="uploads")
+app.mount("/api/snapshots", StaticFiles(directory="/app/uploads/snapshots"), name="snapshots")
 
 @app.on_event("startup")
 def startup_event():
