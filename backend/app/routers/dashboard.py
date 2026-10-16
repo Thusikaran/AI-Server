@@ -298,10 +298,30 @@ def get_all_camera_motion_status(db = Depends(get_db)):
     return result
 
 @router.get("/detections")
-def get_recent_detections(type: str = None, date_str: str = None, limit: int = 50, active_only: bool = False, db = Depends(get_db)):
+def get_recent_detections(
+    type: str = None, 
+    date_str: str = None, 
+    start_date: str = None,
+    end_date: str = None,
+    shop_id: int = None,
+    camera_id: int = None,
+    min_confidence: float = None,
+    limit: int = 60, 
+    page: int = 1,
+    active_only: bool = False, 
+    db = Depends(get_db)
+):
     query = {}
-    if type:
+    if type and type.lower() != "all":
         query["detection_type"] = {"$regex": f"^{type}$", "$options": "i"}
+
+    if shop_id:
+        query["$or"] = [{"shop_id": int(shop_id)}, {"shop_id": str(shop_id)}]
+    if camera_id:
+        query["$or"] = [{"camera_id": int(camera_id)}, {"camera_id": str(camera_id)}]
+
+    if min_confidence is not None:
+        query["confidence"] = {"$gte": float(min_confidence)}
 
     if active_only:
         one_min_ago = datetime.utcnow() - timedelta(minutes=1)
@@ -316,20 +336,52 @@ def get_recent_detections(type: str = None, date_str: str = None, limit: int = 5
             query["detected_at"] = {"$gte": start, "$lt": end}
         except ValueError:
             pass
+    elif start_date or end_date:
+        date_q = {}
+        if start_date:
+            try:
+                s_d = datetime.strptime(start_date, "%Y-%m-%d").date()
+                date_q["$gte"] = datetime.combine(s_d, datetime.min.time())
+            except ValueError:
+                pass
+        if end_date:
+            try:
+                e_d = datetime.strptime(end_date, "%Y-%m-%d").date()
+                date_q["$lt"] = datetime.combine(e_d, datetime.max.time())
+            except ValueError:
+                pass
+        if date_q:
+            query["detected_at"] = date_q
 
-    events = db["detection_events"].find(query).sort("detected_at", -1).limit(limit)
+    skip = max(0, (page - 1) * limit)
+    total_count = db["detection_events"].count_documents(query)
+    events = db["detection_events"].find(query).sort("detected_at", -1).skip(skip).limit(limit)
 
-    return [
-        {
+    items = []
+    for e in events:
+        meta = e.get("metadata") or {}
+        snap = e.get("snapshot_path") or meta.get("snapshot_url")
+        items.append({
             "id": e.get("event_id") or str(e["_id"]),
+            "camera_id": e.get("camera_id"),
             "camera_name": e.get("camera_name"),
+            "shop_id": e.get("shop_id"),
             "shop_name": e.get("shop_name"),
             "detected_at": e.get("detected_at"),
             "ended_at": e.get("ended_at"),
             "detection_type": e.get("detection_type"),
-            "metadata": e.get("metadata")
-        } for e in events
-    ]
+            "confidence": e.get("confidence"),
+            "snapshot_path": snap,
+            "track_id": e.get("track_id"),
+            "metadata": meta
+        })
+
+    return {
+        "total": total_count,
+        "page": page,
+        "limit": limit,
+        "items": items
+    }
 
 class ReviewUpdate(BaseModel):
     review_state: str

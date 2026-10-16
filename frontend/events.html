@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Monitor - Events & Alerts</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* ── Event Filters ────────────────────────────── */
+        .filter-panel {
+            padding: 20px;
+            border-radius: 16px;
+            margin-bottom: 24px;
+        }
+
+        .filter-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            align-items: flex-end;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .filter-group label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .filter-input {
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            color: #fff;
+            font-family: inherit;
+            font-size: 0.88rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .filter-input:focus {
+            border-color: var(--accent-blue);
+        }
+
+        /* ── Event Gallery Grid ──────────────────────── */
+        .events-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .event-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            overflow: hidden;
+            transition: transform 0.25s, box-shadow 0.25s, border-color 0.25s;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .event-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--border-bright);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+        }
+
+        .event-thumb-wrap {
+            position: relative;
+            width: 100%;
+            height: 180px;
+            background: rgba(0, 0, 0, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        .event-thumb {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.3s;
+        }
+
+        .event-card:hover .event-thumb {
+            transform: scale(1.05);
+        }
+
+        .event-thumb-placeholder {
+            font-size: 2.5rem;
+            color: var(--text-muted);
+        }
+
+        .event-tag-badge {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            backdrop-filter: blur(8px);
+            background: rgba(0, 0, 0, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        .event-conf-badge {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            background: rgba(15, 23, 42, 0.85);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .event-body {
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .event-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .event-meta {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        /* ── Modal Lightbox ───────────────────────────── */
+        #snapshot-modal .modal-content {
+            max-width: 880px;
+            width: 95%;
+            padding: 0;
+            overflow: hidden;
+            border-radius: 16px;
+        }
+
+        .modal-image-wrap {
+            background: #000;
+            max-height: 520px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-image-wrap img {
+            max-width: 100%;
+            max-height: 520px;
+            object-fit: contain;
+        }
+
+        .modal-info-bar {
+            padding: 20px;
+            background: var(--surface);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app-container">
+
+        <!-- Sidebar -->
+        <aside class="sidebar glass-panel">
+            <div class="logo">
+                <h2>AI Monitor</h2>
+            </div>
+            <nav class="nav-menu">
+                <a href="index.html" class="nav-item"><span class="icon">🏠</span> Dashboard</a>
+                <a href="shops.html" class="nav-item"><span class="icon">🏪</span> Shops & Cameras</a>
+                <a href="models.html" class="nav-item"><span class="icon">🤖</span> Models</a>
+                <a href="events.html" class="nav-item active"><span class="icon">📸</span> Events & Alerts</a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-header glass-panel">
+                <div>
+                    <h1>AI Detection Events & Snapshots</h1>
+                    <span style="font-size:0.85rem; color:var(--text-secondary);">Browse captured detection alerts, snapshots and track history</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <button class="btn" onclick="loadEvents()" title="Refresh Event Stream">🔄 Refresh</button>
+                    <span id="events-count-badge" style="font-size:0.82rem; font-weight:600; color:var(--accent-blue); background:rgba(59,130,246,0.15); padding:6px 12px; border-radius:20px;">0 Events</span>
+                </div>
+            </header>
+
+            <!-- ── Filter Bar ─────────────────────────────── -->
+            <div class="filter-panel glass-panel">
+                <div class="filter-grid">
+                    <!-- Date Filter -->
+                    <div class="filter-group">
+                        <label>Date Filter</label>
+                        <select id="filter-date-preset" class="filter-input" onchange="onDatePresetChange()">
+                            <option value="today">Today</option>
+                            <option value="yesterday">Yesterday</option>
+                            <option value="7days">Last 7 Days</option>
+                            <option value="all">All Dates</option>
+                            <option value="custom">Custom Date</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group" id="custom-date-wrap" style="display:none;">
+                        <label>Select Date</label>
+                        <input type="date" id="filter-custom-date" class="filter-input" onchange="loadEvents()">
+                    </div>
+
+                    <!-- Category Filter -->
+                    <div class="filter-group">
+                        <label>Category / Model</label>
+                        <select id="filter-category" class="filter-input" onchange="loadEvents()">
+                            <option value="all">All Categories</option>
+                            <option value="human">👤 Human</option>
+                            <option value="fire">🔥 Fire</option>
+                            <option value="helmet">👷 Helmet / PPE</option>
+                            <option value="vehicle">🚗 Vehicle</option>
+                            <option value="weapon">🎯 Weapon</option>
+                            <option value="motion">🟡 Motion</option>
+                        </select>
+                    </div>
+
+                    <!-- Shop Filter -->
+                    <div class="filter-group">
+                        <label>Shop</label>
+                        <select id="filter-shop" class="filter-input" onchange="onShopFilterChange()">
+                            <option value="">All Shops</option>
+                        </select>
+                    </div>
+
+                    <!-- Camera Filter -->
+                    <div class="filter-group">
+                        <label>Camera</label>
+                        <select id="filter-camera" class="filter-input" onchange="loadEvents()">
+                            <option value="">All Cameras</option>
+                        </select>
+                    </div>
+
+                    <!-- Min Confidence -->
+                    <div class="filter-group">
+                        <label>Min Confidence: <span id="conf-val-label" style="color:var(--accent-blue); font-weight:600;">0%</span></label>
+                        <input type="range" id="filter-min-conf" min="0" max="0.9" step="0.05" value="0" 
+                               style="accent-color:var(--accent-blue); cursor:pointer;" 
+                               oninput="document.getElementById('conf-val-label').innerText = Math.round(this.value * 100) + '%'"
+                               onchange="loadEvents()">
+                    </div>
+
+                    <!-- Reset button -->
+                    <div class="filter-group" style="justify-content: flex-end;">
+                        <button class="btn" onclick="resetFilters()">Reset Filters</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Events Feed Container ─────────────────── -->
+            <div id="events-container" class="events-grid">
+                <!-- Dynamically populated by js/events.js -->
+            </div>
+
+            <!-- ── Pagination / Load More ────────────────── -->
+            <div style="text-align:center; margin:30px 0;" id="pagination-wrap">
+                <button class="btn" id="load-more-btn" onclick="loadMoreEvents()" style="display:none; padding:10px 24px;">Load More Events</button>
+            </div>
+        </main>
+    </div>
+
+    <!-- ── Snapshot Modal ────────────────────────────── -->
+    <div id="snapshot-modal" class="modal">
+        <div class="modal-content glass-panel">
+            <div class="modal-header" style="padding: 16px 20px; border-bottom: 1px solid var(--border);">
+                <h3 id="modal-event-title" style="margin:0; font-size:1.1rem; display:flex; align-items:center; gap:8px;">Detection Preview</h3>
+                <button class="btn" style="padding: 4px 10px;" onclick="closeSnapshotModal()">✕</button>
+            </div>
+            
+            <div class="modal-image-wrap">
+                <img id="modal-img" src="" alt="Snapshot Preview">
+            </div>
+
+            <div class="modal-info-bar">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span id="modal-meta-loc" style="font-weight:600; font-size:0.95rem;">Shop • Camera</span>
+                    <span id="modal-meta-time" style="font-size:0.8rem; color:var(--text-secondary);">Timestamp</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <a id="modal-download-link" href="#" download class="btn btn-primary" style="text-decoration:none;">
+                        ⬇️ Download Snapshot
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/ui.js"></script>
+    <script src="js/events.js?v=1"></script>
+</body>
+</html>
