@@ -33,12 +33,35 @@ function setFile(file) {
     document.getElementById('drop-zone').style.borderColor = 'var(--accent-green)';
 }
 
+// ── Type Dropdown Change Handler ──────────────────────────────────────────────
+function onModelTypeChange() {
+    const sel = document.getElementById('model-type');
+    const selectedKey = sel.value;
+    const typeObj = allTypes.find(t => t.name === selectedKey);
+    if (typeObj) {
+        if (typeObj.default_threshold !== undefined) {
+            document.getElementById('model-threshold').value = typeObj.default_threshold;
+            document.getElementById('threshold-val-display').innerText = Math.round(typeObj.default_threshold * 100) + '%';
+        }
+        if (typeObj.default_cooldown !== undefined) {
+            document.getElementById('model-cooldown').value = typeObj.default_cooldown;
+        }
+        if (typeObj.default_tracking !== undefined) {
+            document.getElementById('model-tracking').checked = !!typeObj.default_tracking;
+        }
+    }
+}
+
 // ── Upload ────────────────────────────────────────────────────────────────────
 async function uploadModel() {
     const name = document.getElementById('model-name').value.trim();
     const type = document.getElementById('model-type').value;
+    const threshold = parseFloat(document.getElementById('model-threshold').value) || 0.50;
+    const cooldown = parseInt(document.getElementById('model-cooldown').value) || 10;
+    const tracking = document.getElementById('model-tracking').checked;
 
     if (!name) { UI.toast('Please enter a model name.', 'error'); return showBanner('failed', '⚠️ Please enter a model name.'); }
+    if (!type) { UI.toast('Please select a model type.', 'error'); return showBanner('failed', '⚠️ Please select a model type.'); }
     if (!selectedFile) { UI.toast('Please select a .pt file.', 'error'); return showBanner('failed', '⚠️ Please select a .pt file.'); }
     if (!selectedFile.name.endsWith('.pt')) {
         UI.toast('Only .pt files are accepted.', 'error');
@@ -55,6 +78,14 @@ async function uploadModel() {
     fd.append('name', name);
     fd.append('type', type);
     fd.append('file', selectedFile);
+    fd.append('confidence_threshold', threshold);
+    fd.append('cooldown_seconds', cooldown);
+    fd.append('tracking_enabled', tracking);
+
+    const typeObj = allTypes.find(t => t.name === type);
+    if (typeObj && typeObj.icon) {
+        fd.append('icon', typeObj.icon);
+    }
 
     try {
         const res = await fetch(`${API_BASE}/models/upload`, { method: 'POST', body: fd });
@@ -208,39 +239,132 @@ function renderModelTable() {
         return;
     }
 
-    const rows = models.map(m => `
+    const rows = models.map(m => {
+        const iconClass = m.icon || 'fa-cube';
+        const thresholdPct = Math.round((m.confidence_threshold || 0.50) * 100);
+        const cooldown = m.cooldown_seconds !== undefined ? m.cooldown_seconds : 10;
+        const tracking = m.tracking_enabled !== false;
+
+        return `
         <tr id="model-row-${m.id}">
-            <td><strong>${escHtml(m.name)}</strong></td>
+            <td>
+                <div style="display:flex; align-items:center;">
+                    <span class="icon-badge"><i class="fa-solid ${escHtml(iconClass)}"></i></span>
+                    <strong>${escHtml(m.name)}</strong>
+                </div>
+            </td>
             <td><span class="type-chip">${escHtml(m.type)}</span></td>
-            <td>${escHtml(m.version || 'v1.0')}</td>
+            <td>
+                <span style="font-weight:600; color:var(--accent-blue); background:rgba(59,130,246,0.1); padding:2px 8px; border-radius:6px; font-size:0.82rem;">
+                    ${thresholdPct}%
+                </span>
+            </td>
+            <td>
+                <span style="font-size:0.82rem; color:var(--text-secondary);">
+                    ⏱️ ${cooldown}s
+                </span>
+            </td>
+            <td>
+                <span class="badge ${tracking ? 'badge-active' : 'badge-inactive'}" style="font-size:0.75rem;">
+                    ${tracking ? '🎯 On' : 'Off'}
+                </span>
+            </td>
             <td>${badgeHtml(m.id, m.status)}</td>
-            <td style="font-size:0.78rem; color:var(--text-secondary);">${formatDate(m.created_at)}</td>
             <td>
                 <div class="action-btns">
+                    <button class="btn" onclick="openEditModal(${m.id})" title="Configure Threshold, Tracking & Cooldown">⚙️ Edit</button>
                     ${m.status === 'active'
-            ? `<button class="btn" onclick="setModelStatus(${m.id},'deactivate')">⏸ Deactivate</button>`
-            : `<button class="btn btn-primary" onclick="setModelStatus(${m.id},'activate')">▶ Activate</button>`
+            ? `<button class="btn" onclick="setModelStatus(${m.id},'deactivate')">⏸</button>`
+            : `<button class="btn btn-primary" onclick="setModelStatus(${m.id},'activate')">▶</button>`
         }
-                    <button class="btn btn-danger" onclick="deleteModel(${m.id})">🗑️ Delete</button>
+                    <button class="btn btn-danger" onclick="deleteModel(${m.id})">🗑️</button>
                 </div>
             </td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
 
     container.innerHTML = `
         <table class="model-table">
             <thead>
                 <tr>
-                    <th>Name</th>
+                    <th>Model Name</th>
                     <th>Type</th>
-                    <th>Version</th>
+                    <th>Threshold</th>
+                    <th>Cooldown</th>
+                    <th>Tracking</th>
                     <th>Status</th>
-                    <th>Uploaded</th>
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody>${rows}</tbody>
         </table>`;
+}
+
+// ── Edit Model Settings Modal ────────────────────────────────────────────────
+function openEditModal(modelId) {
+    const model = allModels.find(m => m.id === modelId);
+    if (!model) return;
+
+    document.getElementById('edit-model-id').value = model.id;
+    document.getElementById('edit-model-name').value = model.name;
+    
+    const thresh = model.confidence_threshold !== undefined ? model.confidence_threshold : 0.50;
+    document.getElementById('edit-model-threshold').value = thresh;
+    document.getElementById('edit-threshold-val').innerText = Math.round(thresh * 100) + '%';
+    
+    document.getElementById('edit-model-cooldown').value = model.cooldown_seconds !== undefined ? model.cooldown_seconds : 10;
+    document.getElementById('edit-model-tracking').checked = model.tracking_enabled !== false;
+    
+    const iconEl = document.getElementById('edit-model-icon');
+    if (iconEl) {
+        iconEl.innerHTML = `<i class="fa-solid ${escHtml(model.icon || 'fa-cube')}"></i>`;
+    }
+
+    document.getElementById('edit-model-modal').classList.add('active');
+}
+
+function closeEditModal() {
+    document.getElementById('edit-model-modal').classList.remove('active');
+}
+
+async function saveModelEdit() {
+    const modelId = parseInt(document.getElementById('edit-model-id').value);
+    const name = document.getElementById('edit-model-name').value.trim();
+    const threshold = parseFloat(document.getElementById('edit-model-threshold').value);
+    const cooldown = parseInt(document.getElementById('edit-model-cooldown').value);
+    const tracking = document.getElementById('edit-model-tracking').checked;
+
+    if (!name) {
+        UI.toast('Please provide a name', 'error');
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/models/${modelId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: name,
+                confidence_threshold: threshold,
+                cooldown_seconds: cooldown,
+                tracking_enabled: tracking
+            })
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            UI.toast(err.detail || 'Failed to update model', 'error');
+            return;
+        }
+
+        UI.toast('Model settings saved successfully', 'success');
+        closeEditModal();
+        await loadModels();
+    } catch (e) {
+        console.error(e);
+        UI.toast('Network error updating model', 'error');
+    }
 }
 
 // ── Live badge update (during polling) ───────────────────────────────────────
@@ -292,8 +416,9 @@ function closeTypesModal() {
 function populateTypeDropdown(types) {
     const sel = document.getElementById('model-type');
     sel.innerHTML = types.map(t =>
-        `<option value="${escHtml(t.name)}">${escHtml(t.display_name)}</option>`
+        `<option value="${escHtml(t.name)}">${t.icon ? '● ' : ''}${escHtml(t.display_name)}</option>`
     ).join('');
+    onModelTypeChange();
 }
 
 async function loadModelTypes() {
