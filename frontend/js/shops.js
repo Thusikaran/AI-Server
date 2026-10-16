@@ -189,20 +189,28 @@ function escHtmlShops(s) {
 
 // ─── Model icon mapping ───────────────────────────────────────────────────────
 const MODEL_TYPE_ICONS = {
-    yolo_human: '🚶', human: '🚶',
-    yolo_fire: '🔥', fire: '🔥',
-    yolo_weapon: '🔫', weapon: '🔫',
+    human: '<i class="fa-solid fa-user"></i>',
+    yolo_human: '<i class="fa-solid fa-user"></i>',
+    fire: '<i class="fa-solid fa-fire" style="color:#f87171;"></i>',
+    yolo_fire: '<i class="fa-solid fa-fire" style="color:#f87171;"></i>',
+    helmet: '<i class="fa-solid fa-hard-hat" style="color:#fbbf24;"></i>',
+    vehicle: '<i class="fa-solid fa-car" style="color:#60a5fa;"></i>',
+    weapon: '<i class="fa-solid fa-crosshairs" style="color:#ef4444;"></i>',
+    yolo_weapon: '<i class="fa-solid fa-crosshairs" style="color:#ef4444;"></i>',
     mog2: '🟡', motion: '🟡',
-    custom: '🤖',
+    custom: '<i class="fa-solid fa-cube"></i>'
 };
 
-function getModelIcon(type) {
-    if (!type) return '🤖';
+function getModelIcon(type, iconField = null) {
+    if (iconField && iconField.startsWith('fa-')) {
+        return `<i class="fa-solid ${escHtmlShops(iconField)}"></i>`;
+    }
+    if (!type) return '<i class="fa-solid fa-cube"></i>';
     const key = type.toLowerCase();
     for (const [k, icon] of Object.entries(MODEL_TYPE_ICONS)) {
         if (key === k || key.includes(k)) return icon;
     }
-    return '🤖';
+    return '<i class="fa-solid fa-cube"></i>';
 }
 
 function buildCameraHtml(cam, shopName) {
