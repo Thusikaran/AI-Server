@@ -272,6 +272,7 @@ function renderModelTable() {
             <td>${badgeHtml(m.id, m.status)}</td>
             <td>
                 <div class="action-btns">
+                    <button class="btn" style="background:rgba(59,130,246,0.15); color:#60a5fa; border-color:rgba(59,130,246,0.3);" onclick="openTestModal(${m.id})" title="Send test image to this model">🧪 Test</button>
                     <button class="btn" onclick="openEditModal(${m.id})" title="Configure Threshold, Tracking & Cooldown">⚙️ Edit</button>
                     ${m.status === 'active'
             ? `<button class="btn" onclick="setModelStatus(${m.id},'deactivate')">⏸</button>`
@@ -364,6 +365,105 @@ async function saveModelEdit() {
     } catch (e) {
         console.error(e);
         UI.toast('Network error updating model', 'error');
+    }
+}
+
+// ── Test Model Modal Logic ───────────────────────────────────────────────────
+let selectedTestFile = null;
+
+function openTestModal(modelId) {
+    const model = allModels.find(m => m.id === modelId);
+    if (!model) return;
+
+    document.getElementById('test-model-id').value = model.id;
+    document.getElementById('test-model-name-title').textContent = model.name;
+
+    const thresh = model.confidence_threshold !== undefined ? model.confidence_threshold : 0.50;
+    document.getElementById('test-threshold').value = thresh;
+    document.getElementById('test-threshold-val').innerText = Math.round(thresh * 100) + '%';
+
+    const iconEl = document.getElementById('test-model-icon');
+    if (iconEl) {
+        iconEl.innerHTML = `<i class="fa-solid ${escHtml(model.icon || 'fa-cube')}"></i>`;
+    }
+
+    // Reset upload state
+    selectedTestFile = null;
+    document.getElementById('test-dz-text').innerHTML = 'Click or drag &amp; drop an image here to test detection';
+    document.getElementById('test-drop-zone').style.borderColor = '';
+    document.getElementById('run-test-btn').disabled = true;
+    document.getElementById('test-results-wrap').style.display = 'none';
+
+    document.getElementById('test-model-modal').classList.add('active');
+}
+
+function closeTestModal() {
+    document.getElementById('test-model-modal').classList.remove('active');
+}
+
+function handleTestFileSelect(e) {
+    const file = e.target.files[0];
+    if (file) {
+        selectedTestFile = file;
+        document.getElementById('test-dz-text').innerHTML = `📁 <strong>${escHtml(file.name)}</strong> (${(file.size / 1024).toFixed(1)} KB)`;
+        document.getElementById('test-drop-zone').style.borderColor = 'var(--accent-green)';
+        document.getElementById('run-test-btn').disabled = false;
+    }
+}
+
+async function runModelTest() {
+    if (!selectedTestFile) {
+        UI.toast('Please select an image file first.', 'error');
+        return;
+    }
+
+    const modelId = document.getElementById('test-model-id').value;
+    const threshold = parseFloat(document.getElementById('test-threshold').value);
+    const runBtn = document.getElementById('run-test-btn');
+
+    runBtn.disabled = true;
+    runBtn.textContent = '⏳ Processing...';
+
+    const fd = new FormData();
+    fd.append('file', selectedTestFile);
+    fd.append('threshold', threshold);
+
+    try {
+        const res = await fetch(`${API_BASE}/models/${modelId}/test`, {
+            method: 'POST',
+            body: fd
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.detail || 'Test failed');
+        }
+
+        const data = await res.json();
+        
+        // Show result image
+        document.getElementById('test-result-img').src = data.annotated_image;
+        document.getElementById('test-count-badge').textContent = `${data.count} Detection${data.count !== 1 ? 's' : ''}`;
+        
+        const tagsContainer = document.getElementById('test-detection-tags');
+        if (data.detections.length) {
+            tagsContainer.innerHTML = data.detections.map(d => `
+                <span class="badge badge-active" style="font-size:0.8rem; padding:4px 10px;">
+                    🎯 ${escHtml(d.label)}: ${Math.round(d.confidence * 100)}%
+                </span>
+            `).join('');
+        } else {
+            tagsContainer.innerHTML = `<span style="font-size:0.85rem; color:var(--text-secondary);">No objects detected above ${Math.round(threshold * 100)}% threshold.</span>`;
+        }
+
+        document.getElementById('test-results-wrap').style.display = 'block';
+        UI.toast(`Detection completed: ${data.count} found`, 'success');
+    } catch (e) {
+        console.error(e);
+        UI.toast(e.message || 'Model test inference failed', 'error');
+    } finally {
+        runBtn.disabled = false;
+        runBtn.textContent = '⚡ Run Detection';
     }
 }
 

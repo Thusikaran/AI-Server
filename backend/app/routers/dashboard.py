@@ -120,60 +120,79 @@ def get_dashboard_stats(db = Depends(get_db)):
     if 'motion' in detection_counts:
         del detection_counts['motion']
 
-    # Pre-fetch running assignments count in 1 query
-    running_assignments_count = db["camera_model_assignments"].count_documents({"is_running": True})
-
-    # Pre-fetch all active events in the last 1 minute in 1 query
+    # Pre-fetch all active events in the last 1 minute
     recent_active_events = list(db["detection_events"].find(
         {"ended_at": None, "detected_at": {"$gte": one_min_ago}},
         {"camera_id": 1, "detection_type": 1}
     ))
     active_by_type = {}
     for ev in recent_active_events:
-        dt = ev.get("detection_type")
+        dt = (ev.get("detection_type") or "").lower()
         cid = ev.get("camera_id")
         if dt not in active_by_type:
             active_by_type[dt] = set()
         active_by_type[dt].add(cid)
 
-    # Detailed detections based on ModelTypes
+    # Map running model assignments to their specific model type
+    running_assignments = list(db["camera_model_assignments"].find({"is_running": True}))
+    running_model_ids = {a.get("model_id") for a in running_assignments}
+    
+    # Query models matching running model IDs
+    active_models = list(db["models"].find({
+        "$or": [{"id": {"$in": list(running_model_ids)}}, {"model_id": {"$in": list(running_model_ids)}}]
+    }))
+    
+    # Count how many cameras are running each specific model type
+    model_id_to_type = {}
+    for m in active_models:
+        mid = m.get("model_id") or m.get("id")
+        mtype = (m.get("type") or "").lower()
+        model_id_to_type[mid] = mtype
+
+    cams_running_by_type = {}
+    for a in running_assignments:
+        mid = a.get("model_id")
+        cid = a.get("camera_id")
+        mtype = model_id_to_type.get(mid)
+        if mtype:
+            if mtype not in cams_running_by_type:
+                cams_running_by_type[mtype] = set()
+            cams_running_by_type[mtype].add(cid)
+
+    # Detailed detections based on ModelTypes — ONLY show models enabled on cameras!
     detailed_detections = []
     model_types = list(db["model_types"].find())
-    core_motion_added = False
     
     for mt in model_types:
-        mt_name = mt.get("name")
+        mt_name = (mt.get("name") or "").lower()
         display_name = mt.get("display_name")
-        if mt_name in ('mog2', 'motion'):
-            core_motion_added = True
-            cameras_running_count = len(motion_running)
-            actual_type = "motion"
-        elif mt_name == "yolo_human":
-            actual_type = "human"
-            cameras_running_count = running_assignments_count
-        else:
-            actual_type = mt_name
-            cameras_running_count = running_assignments_count
+        icon = mt.get("icon") or "fa-cube"
 
-        total = detection_counts.get(actual_type, 0)
-        active_now = len(active_by_type.get(actual_type, set()))
+        # Check how many cameras have this model running
+        cameras_running_set = cams_running_by_type.get(mt_name, set())
+        # Also check variants like yolo_human vs human
+        if not cameras_running_set:
+            for k, s in cams_running_by_type.items():
+                if k == f"yolo_{mt_name}" or mt_name == f"yolo_{k}":
+                    cameras_running_set = s
+                    break
+
+        cameras_running_count = len(cameras_running_set)
+
+        # User requirement: ONLY show models that cameras have enabled!
+        if cameras_running_count == 0:
+            continue
+
+        total = detection_counts.get(mt_name, 0)
+        active_now = len(active_by_type.get(mt_name, set()))
         
         detailed_detections.append({
             "type": mt_name,
             "display_name": display_name,
+            "icon": icon,
             "active_now": active_now,
             "total_today": total,
             "cameras_running": cameras_running_count
-        })
-
-    if not core_motion_added:
-        mot_total = detection_counts.get("motion", 0)
-        detailed_detections.insert(0, {
-            "type": "motion",
-            "display_name": "Motion",
-            "active_now": len(active_by_type.get("motion", set())),
-            "total_today": mot_total,
-            "cameras_running": len(motion_running)
         })
 
     cpu_percent = _cached_cpu_percent
@@ -311,7 +330,16 @@ def get_recent_detections(
     active_only: bool = False, 
     db = Depends(get_db)
 ):
-    query = {}
+    query = {
+        # Only show actual model detections that have captured snapshots
+        "detection_type": {"$nin": ["motion", "cloud_trigger"]},
+        "$and": [
+            {"$or": [
+                {"snapshot_path": {"$ne": None, "$exists": True}},
+                {"metadata.snapshot_url": {"$ne": None, "$exists": True}}
+            ]}
+        ]
+    }
     if type and type.lower() != "all":
         query["detection_type"] = {"$regex": f"^{type}$", "$options": "i"}
 

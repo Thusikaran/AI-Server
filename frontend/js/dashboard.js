@@ -134,31 +134,45 @@ function renderDetailedDetectionCards(detailedDetections) {
         container.innerHTML = '';
     }
 
+    // Re-render cards strictly for models with enabled cameras
+    const activeTypes = new Set(detailedDetections.filter(d => d.cameras_running > 0).map(d => d.type.toLowerCase()));
+
+    // Hide or remove cards that are no longer active on any camera
+    container.querySelectorAll('.detect-card').forEach(el => {
+        const cardType = el.id.replace('det-card-', '');
+        if (!activeTypes.has(cardType)) {
+            el.remove();
+        }
+    });
+
+    if (activeTypes.size === 0) {
+        container.innerHTML = '<div style="color:var(--text-secondary); grid-column:1/-1; padding:20px; text-align:center;">No AI models are currently enabled on any camera. Go to <a href="shops.html" style="color:var(--accent-blue);">Shops &amp; Cameras</a> to turn on a model.</div>';
+        return;
+    }
+
     detailedDetections.forEach(det => {
+        if (det.cameras_running <= 0) return;
+
         const type = det.type;
         const id = `det-card-${type.toLowerCase()}`;
         let card = document.getElementById(id);
 
-        const isActiveOrDetected = det.cameras_running > 0 || det.active_now > 0 || det.total_today > 0;
-
-        if (!isActiveOrDetected) {
-            if (card) card.style.display = 'none';
-            return;
-        }
-        if (card) card.style.display = '';
-
-        let icon = '🤖';
+        let icon = '<i class="fa-solid fa-cube"></i>';
         let color = '#3b82f6';
-        if (type.includes('fire')) { icon = '🔥'; color = 'var(--red)'; }
-        else if (type.includes('human') || type.includes('person') || type.includes('crowd')) { icon = '🚶'; color = 'var(--blue)'; }
-        else if (type.includes('weapon') || type.includes('gun')) { icon = '🔫'; color = 'var(--purple)'; }
-        else if (type.includes('motion') || type === 'mog2') { icon = '🟡'; color = 'var(--yellow)'; }
-        else if (type.includes('cloud_trigger')) { icon = '🦹'; color = '#a855f7'; }
+        if (det.icon && det.icon.startsWith('fa-')) {
+            icon = `<i class="fa-solid ${det.icon}"></i>`;
+        }
+        if (type.includes('fire')) { color = 'var(--red)'; }
+        else if (type.includes('human') || type.includes('person')) { color = 'var(--blue)'; }
+        else if (type.includes('weapon')) { color = 'var(--purple)'; }
+        else if (type.includes('helmet')) { color = 'var(--yellow)'; }
+        else if (type.includes('vehicle')) { color = 'var(--green)'; }
+
         if (!card) {
             card = document.createElement('div');
             card.id = id;
             card.className = 'detect-card glass-panel';
-            card.onclick = () => openDetectionList(type);
+            card.onclick = () => window.location.href = `events.html`;
 
             card.innerHTML = `
                 <div class="detect-card-icon">${icon}</div>
@@ -166,11 +180,11 @@ function renderDetailedDetectionCards(detailedDetections) {
                 <div style="display:flex; justify-content:space-between; width:100%; font-size:0.9rem;">
                     <div style="display:flex; flex-direction:column; align-items:center;">
                         <span style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px;">Active Cams</span>
-                        <strong class="num-animate" id="det-active-${type.toLowerCase()}" style="color:${color}; font-size:1.4rem;">0</strong>
+                        <strong class="num-animate" id="det-active-${type.toLowerCase()}" style="color:${color}; font-size:1.4rem;">${det.cameras_running}</strong>
                     </div>
                     <div style="display:flex; flex-direction:column; align-items:center;">
-                        <span style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px;">Detected (60s)</span>
-                        <strong class="num-animate" id="det-detected-${type.toLowerCase()}" style="color:#fff; font-size:1.4rem;">0</strong>
+                        <span style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px;">Detected Today</span>
+                        <strong class="num-animate" id="det-detected-${type.toLowerCase()}" style="color:#fff; font-size:1.4rem;">${det.total_today || 0}</strong>
                     </div>
                 </div>
             `;
@@ -178,7 +192,7 @@ function renderDetailedDetectionCards(detailedDetections) {
         }
 
         animateValue(`det-active-${type.toLowerCase()}`, det.cameras_running);
-        animateValue(`det-detected-${type.toLowerCase()}`, det.active_now);
+        animateValue(`det-detected-${type.toLowerCase()}`, det.total_today || 0);
     });
 }
 

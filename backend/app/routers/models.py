@@ -240,3 +240,73 @@ def deactivate_model(model_id: int, db = Depends(get_db)):
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Model not found")
     return {"message": "Model deactivated"}
+
+@router.post("/{model_id}/test")
+async def test_model_inference(
+    model_id: int, 
+    file: UploadFile = File(...),
+    threshold: Optional[float] = Form(None),
+    db = Depends(get_db)
+):
+    import cv2
+    import numpy as np
+    import base64
+    from ultralytics import YOLO
+    import torch
+
+    mid = int(model_id)
+    db_model = db["models"].find_one({"$or": [{"id": mid}, {"model_id": mid}]})
+    if not db_model:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    file_path = db_model.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=400, detail="Model weights file (.pt) not found on disk")
+
+    conf_thresh = threshold if threshold is not None else float(db_model.get("confidence_threshold", 0.50))
+
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Invalid image file format")
+
+    try:
+        yolo = YOLO(file_path)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        results = yolo.predict(frame, conf=conf_thresh, device=device, verbose=False)
+        
+        annotated = frame.copy()
+        detections = []
+        for r in results:
+            for box in r.boxes:
+                conf = float(box.conf[0])
+                cls_id = int(box.cls[0])
+                label = yolo.names[cls_id]
+                xyxy = [int(v) for v in box.xyxy[0].tolist()]
+
+                color = (0, 0, 255) if "fire" in label.lower() or "weapon" in label.lower() else (0, 255, 0)
+                cv2.rectangle(annotated, (xyxy[0], xyxy[1]), (xyxy[2], xyxy[3]), color, 2)
+                tag = f"{label} {int(conf * 100)}%"
+                (w, h), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+                cv2.rectangle(annotated, (xyxy[0], max(0, xyxy[1] - 22)), (xyxy[0] + w, xyxy[1]), color, -1)
+                cv2.putText(annotated, tag, (xyxy[0], max(0, xyxy[1] - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+
+                detections.append({
+                    "label": label,
+                    "confidence": round(conf, 3),
+                    "box": xyxy
+                })
+
+        _, buffer = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+        b64_image = base64.b64encode(buffer).decode("utf-8")
+
+        return {
+            "model_name": db_model.get("name"),
+            "threshold_used": conf_thresh,
+            "count": len(detections),
+            "detections": detections,
+            "annotated_image": f"data:image/jpeg;base64,{b64_image}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Model inference failed: {str(e)}")

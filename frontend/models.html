@@ -571,8 +571,59 @@
         </div>
     </div>
 
+    <!-- ── Test Model Modal ────────────────────────────────────── -->
+    <div id="test-model-modal" class="modal">
+        <div class="modal-content glass-panel" style="max-width: 760px; width: 95%;">
+            <div class="modal-header">
+                <h2 style="margin:0;"><span id="test-model-icon" class="icon-badge"></span> Test Model Detection: <span id="test-model-name-title" style="color:var(--accent-blue);"></span></h2>
+                <button class="btn" style="padding: 4px 10px;" onclick="closeTestModal()">✕</button>
+            </div>
+            
+            <input type="hidden" id="test-model-id">
+
+            <!-- Controls row -->
+            <div style="display:grid; grid-template-columns: 2fr 1fr; gap:15px; margin: 15px 0; align-items: flex-end;">
+                <div class="form-group">
+                    <label>Detection Threshold: <span id="test-threshold-val" style="color:var(--accent-blue); font-weight:600;">50%</span></label>
+                    <div class="slider-wrap">
+                        <input type="range" id="test-threshold" min="0.10" max="0.95" step="0.05" value="0.50" oninput="document.getElementById('test-threshold-val').innerText = Math.round(this.value * 100) + '%'">
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:flex-end;">
+                    <button class="btn btn-primary" id="run-test-btn" onclick="runModelTest()" style="width:100%;" disabled>
+                        ⚡ Run Detection
+                    </button>
+                </div>
+            </div>
+
+            <!-- Upload drop area -->
+            <div class="drop-zone" id="test-drop-zone" onclick="document.getElementById('test-file-input').click()"
+                 style="padding: 20px; margin-top:0;">
+                <div class="dz-icon" style="font-size:1.8rem;">🖼️</div>
+                <div class="dz-text" id="test-dz-text">Click or drag &amp; drop an image here to test detection</div>
+            </div>
+            <input type="file" id="test-file-input" accept="image/*" style="display:none" onchange="handleTestFileSelect(event)">
+
+            <!-- Results container -->
+            <div id="test-results-wrap" style="display:none; margin-top:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-weight:600; font-size:0.95rem;">Detection Output</span>
+                    <span id="test-count-badge" style="font-size:0.8rem; font-weight:700; color:var(--accent-green); background:rgba(16,185,129,0.15); padding:3px 10px; border-radius:12px;">0 Detections</span>
+                </div>
+                
+                <!-- Annotated image view -->
+                <div style="background:#000; border-radius:10px; overflow:hidden; display:flex; justify-content:center; max-height:420px; border:1px solid var(--border);">
+                    <img id="test-result-img" src="" style="max-width:100%; max-height:420px; object-fit:contain;">
+                </div>
+
+                <!-- Detections tag list -->
+                <div id="test-detection-tags" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:12px;"></div>
+            </div>
+        </div>
+    </div>
+
     <script src="js/ui.js"></script>
-    <script src="js/models.js?v=7"></script>
+    <script src="js/models.js?v=8"></script>
 </body>
 
 </html>
